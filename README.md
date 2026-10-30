@@ -23,7 +23,9 @@ npm run preview:student
 
 首次启动在 Electron 用户数据目录创建 `config.json`，默认教师端，HTTP 服务仅监听本机 `127.0.0.1:41731`。学校名称、Logo 路径、学校服务地址、微信 AppID 和回调地址在此配置；默认地址为空，不含任何学校环境信息。界面底部显示配置文件路径。要在同一台开发机测试学生端，可另建学生端配置文件，设置 `role` 为 `student`、`teacherUrl` 为 `http://127.0.0.1:41731`，并通过 `SIGNIN_CONFIG_PATH` 指向该文件启动第二个进程。实际机房通信必须按方案配置 HTTPS。
 
-部署配置、证书、私钥和签名凭据不要提交到 Git。`.gitignore` 已忽略常见本地配置和密钥文件；校徽可由 `schoolLogoPath` 从安装机器本地加载。当前学校学生名册必须由学校后端提供，应用不会模拟真实签到成功。
+开发时可将 [config.local.example.json](config.local.example.json) 复制为根目录的 `config.local.json`，填写本机配置后运行 `npm run dev`。开发程序会自动读取该文件；文件已被 `.gitignore` 排除，不会提交到 Git。也可把配置放在项目目录之外，并通过 `SIGNIN_CONFIG_PATH` 指定完整路径。已打包应用不读取项目目录配置，继续使用 Electron 用户数据目录中的 `config.json`。
+
+部署配置、证书、私钥和签名凭据不要提交到 Git。`.gitignore` 已忽略常见本地配置和密钥文件；校徽可由 `schoolLogoPath` 从安装机器本地加载。未配置校徽时，界面、窗口和安装包使用仓库内的通用默认图标 `resources/default-icon.png`。当前学校学生名册必须由学校后端提供，应用不会模拟真实签到成功。
 
 按学校品牌生成本地应用图标（需安装 Python Pillow）：
 

@@ -1,0 +1,12 @@
+{
+  "role": "teacher",
+  "stationId": "LOCAL-TEST-PC",
+  "teacherUrl": "http://127.0.0.1:41731",
+  "listenHost": "127.0.0.1",
+  "listenPort": 41731,
+  "schoolName": "本地测试",
+  "schoolLogoPath": "",
+  "schoolServerUrl": "",
+  "wechatAppId": "",
+  "wechatRedirectUri": ""
+}

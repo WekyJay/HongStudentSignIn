@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Tray } from 'electron'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import type { NativeImage } from 'electron'
 import { is } from '@electron-toolkit/utils'
@@ -24,8 +24,7 @@ applyUserDataDir(buildRole)
 
 const uiPreview = is.dev && process.env.SIGNIN_UI_PREVIEW === '1'
 
-function loadSchoolLogo(path: string | undefined): string | null {
-  if (!path) return null
+function loadImageDataUrl(path: string): string | null {
   const mimeTypes: Record<string, string> = {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
@@ -43,6 +42,25 @@ function loadSchoolLogo(path: string | undefined): string | null {
     return null
   }
 }
+
+function loadSchoolLogo(path: string | undefined): string | null {
+  const customLogo = path ? loadImageDataUrl(path) : null
+  return customLogo ?? loadImageDataUrl(join(__dirname, '../../resources/default-icon.png'))
+}
+
+function applicationIconPath(): string {
+  return applicationIconPathForSchoolLogo(undefined)
+}
+
+function applicationIconPathForSchoolLogo(schoolLogoPath: string | undefined): string {
+  if (schoolLogoPath && existsSync(schoolLogoPath)) return schoolLogoPath
+  const generatedIconPath = join(__dirname, '../../resources/icon.png')
+  return existsSync(generatedIconPath)
+    ? generatedIconPath
+    : join(__dirname, '../../resources/default-icon.png')
+}
+
+let activeAppIconPath = applicationIconPath()
 
 // 学生端驻留托盘时再次双击快捷方式只唤起已有进程，不重复开托盘图标
 const singleInstance = app.requestSingleInstanceLock()
@@ -84,7 +102,7 @@ function createWindow(config: AppConfig): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
     frame: false,
-    icon: join(__dirname, '../../resources/icon.png'),
+    icon: activeAppIconPath,
     backgroundColor: windowBackground(),
     fullscreen: config.role === 'student',
     kiosk: studentKiosk,
@@ -158,7 +176,7 @@ async function fetchTeacher<T>(config: AppConfig, path: string, init?: RequestIn
 type StudentTrayState = 'offline' | 'idle' | 'active'
 
 function trayImage(gray: boolean): NativeImage {
-  const image = nativeImage.createFromPath(join(__dirname, '../../resources/icon.png'))
+  const image = nativeImage.createFromPath(activeAppIconPath)
   if (image.isEmpty()) return image
   // 32px 托盘图标在高分屏下不会被放糊，Windows 会按 DPI 缩放
   const sized = image.resize({ width: 32, height: 32 })
@@ -288,6 +306,7 @@ app.whenReady().then(async () => {
   if (!singleInstance) return
   try {
     const { config, path: configPath } = loadConfig(buildRole)
+    activeAppIconPath = applicationIconPathForSchoolLogo(config.schoolLogoPath)
     const schoolApi = new SchoolApiClient(
       config.schoolServerUrl!,
       join(app.getPath('userData'), 'school-auth.json')
@@ -350,11 +369,13 @@ app.whenReady().then(async () => {
         }
       })()
     }
-    const callbackFilter = { urls: [`${config.wechatRedirectUri!}*`] }
-    mainWindow.webContents.session.webRequest.onBeforeRequest(callbackFilter, (details, done) => {
-      done({ cancel: true })
-      handleWechatCallback(details.url)
-    })
+    if (config.wechatRedirectUri) {
+      const callbackFilter = { urls: [`${config.wechatRedirectUri}*`] }
+      mainWindow.webContents.session.webRequest.onBeforeRequest(callbackFilter, (details, done) => {
+        done({ cancel: true })
+        handleWechatCallback(details.url)
+      })
+    }
     // 兜底：万一 webRequest 未拦截到 iframe 跳转，导航完成后同样取 code 换 token
     mainWindow.webContents.on('did-frame-navigate', (_event, url) => {
       if (config.wechatRedirectUri && url.startsWith(config.wechatRedirectUri)) {

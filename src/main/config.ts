@@ -37,7 +37,12 @@ export function loadConfig(defaultRole: AppRole = 'teacher'): {
   config: AppConfig
   path: string
 } {
-  const path = process.env.SIGNIN_CONFIG_PATH || join(app.getPath('userData'), 'config.json')
+  const localDevConfigPath = join(process.cwd(), 'config.local.json')
+  const path =
+    process.env.SIGNIN_CONFIG_PATH ||
+    (!app.isPackaged && existsSync(localDevConfigPath)
+      ? localDevConfigPath
+      : join(app.getPath('userData'), 'config.json'))
   if (!existsSync(path)) {
     mkdirSync(app.getPath('userData'), { recursive: true })
     const initial: AppConfig = {
@@ -73,6 +78,12 @@ export function loadConfig(defaultRole: AppRole = 'teacher'): {
     const schoolUrl = new URL(config.schoolServerUrl)
     if (!['http:', 'https:'].includes(schoolUrl.protocol)) {
       throw new Error('config.schoolServerUrl 协议无效')
+    }
+  }
+  if (config.wechatRedirectUri) {
+    const redirectUrl = new URL(config.wechatRedirectUri)
+    if (!['http:', 'https:'].includes(redirectUrl.protocol)) {
+      throw new Error('config.wechatRedirectUri 协议无效')
     }
   }
   if (config.role === 'teacher' && !['localhost', '127.0.0.1', '::1'].includes(config.listenHost)) {

@@ -8,6 +8,7 @@ files:
   - package.json
 win:
   target: nsis
+  icon: build/default-icon.ico
   executableName: StudentSignIn
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
