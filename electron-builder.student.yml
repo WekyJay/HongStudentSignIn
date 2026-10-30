@@ -1,0 +1,14 @@
+# 学生端安装包：npm run build:win:student
+extends: ./electron-builder.yml
+appId: org.example.studentsignin.student
+productName: 学生签到学生端
+directories:
+  output: dist/student
+extraMetadata:
+  signinRole: student
+win:
+  executableName: StudentSignInStudent
+nsis:
+  artifactName: hong-student-sign-in-student-${version}-setup.${ext}
+  shortcutName: 学生签到学生端
+  uninstallDisplayName: 学生签到学生端

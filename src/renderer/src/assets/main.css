@@ -1,0 +1,127 @@
+* {
+  box-sizing: border-box;
+}
+:root {
+  --background: 216 60% 98%;
+  --foreground: 217 52% 18%;
+  --card: 0 0% 100%;
+  --card-foreground: 217 52% 18%;
+  --primary: 218 91% 59%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 216 100% 96%;
+  --secondary-foreground: 218 62% 38%;
+  --muted: 216 38% 96%;
+  --muted-foreground: 215 24% 48%;
+  --accent: 216 100% 96%;
+  --accent-foreground: 218 62% 38%;
+  --destructive: 0 72% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214 40% 90%;
+  --input: 214 40% 88%;
+  --ring: 218 91% 69%;
+  --radius: 0.625rem;
+}
+:root[data-theme='dark'] {
+  --background: 220 5% 10%;
+  --foreground: 220 5% 92%;
+  --card: 220 5% 15%;
+  --card-foreground: 220 5% 92%;
+  --primary: 215 15% 48%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 5% 25%;
+  --secondary-foreground: 220 5% 92%;
+  --muted: 220 4% 20%;
+  --muted-foreground: 220 5% 69%;
+  --accent: 220 5% 27%;
+  --accent-foreground: 220 6% 96%;
+  --destructive: 0 36% 44%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 4% 27%;
+  --input: 220 4% 32%;
+  --ring: 215 15% 65%;
+}
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+}
+body:has(.student-screen) {
+  overflow: hidden;
+  user-select: none;
+}
+input {
+  user-select: text;
+}
+button,
+input {
+  font-family: inherit;
+}
+button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+input:focus-visible {
+  outline: 3px solid #8baeff;
+  outline-offset: 2px;
+}
+:root[data-theme='dark'] .bg-white {
+  background-color: hsl(var(--card));
+}
+:root[data-theme='dark'] .bg-white\/70 {
+  background-color: hsl(var(--card) / 0.9);
+}
+:root[data-theme='dark'] .bg-blue-50 {
+  background-color: #34383d;
+}
+:root[data-theme='dark'] .bg-violet-50 {
+  background-color: #35343b;
+}
+:root[data-theme='dark'] .bg-emerald-50,
+:root[data-theme='dark'] .bg-green-50 {
+  background-color: #29362f;
+}
+:root[data-theme='dark'] .bg-red-50 {
+  background-color: #3c2b2d;
+}
+:root[data-theme='dark'] .bg-amber-50 {
+  background-color: #3d372b;
+}
+:root[data-theme='dark'] .text-primary {
+  color: #b7c5d5;
+}
+:root[data-theme='dark'] .text-violet-600 {
+  color: #c6c2cc;
+}
+:root[data-theme='dark'] .bg-brand-600 {
+  background-color: #667586;
+}
+:root[data-theme='dark'] .bg-brand-500 {
+  background-color: #788898;
+}
+:root[data-theme='dark'] .text-brand-600 {
+  color: #b7c5d5;
+}
+:root[data-theme='dark'] .text-emerald-600,
+:root[data-theme='dark'] .text-green-700 {
+  color: #74d6a0;
+}
+:root[data-theme='dark'] .text-red-700 {
+  color: #ff9b9b;
+}
+:root[data-theme='dark'] .text-amber-700 {
+  color: #f4ce78;
+}
+:root[data-theme='dark'] .border-red-200 {
+  border-color: #6c3539;
+}
+:root[data-theme='dark'] .bg-red-50.text-red-700 {
+  color: #ffb2b2;
+}

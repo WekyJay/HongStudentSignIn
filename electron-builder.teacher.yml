@@ -1,0 +1,14 @@
+# 教师端安装包：npm run build:win:teacher
+extends: ./electron-builder.yml
+appId: org.example.studentsignin.teacher
+productName: 学生签到教师端
+directories:
+  output: dist/teacher
+extraMetadata:
+  signinRole: teacher
+win:
+  executableName: StudentSignInTeacher
+nsis:
+  artifactName: hong-student-sign-in-teacher-${version}-setup.${ext}
+  shortcutName: 学生签到教师端
+  uninstallDisplayName: 学生签到教师端
