@@ -34,10 +34,16 @@ declare global {
       stopSession(): Promise<TeacherSnapshot>
       markLeave(studentId: string): Promise<TeacherSnapshot>
       clearLeave(studentId: string): Promise<TeacherSnapshot>
+      resetCheckin(studentId: string): Promise<TeacherSnapshot>
+      resetSessionCheckins(): Promise<TeacherSnapshot>
       listArchivedSessions(query: AttendanceArchiveQuery): Promise<AttendanceArchivePage>
       getArchivedSession(sessionId: string): Promise<ArchivedSessionDetail>
       updateArchivedSession(sessionId: string, className: string): Promise<ArchivedSessionDetail>
-      updateArchivedEntry(sessionId: string, studentId: string, update: ArchivedEntryUpdate): Promise<ArchivedSessionDetail>
+      updateArchivedEntry(
+        sessionId: string,
+        studentId: string,
+        update: ArchivedEntryUpdate
+      ): Promise<ArchivedSessionDetail>
       deleteArchivedEntry(sessionId: string, studentId: string): Promise<ArchivedSessionDetail>
       deleteArchivedSession(sessionId: string): Promise<void>
       exportArchivedSession(sessionId: string): Promise<string | null>

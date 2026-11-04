@@ -39,13 +39,21 @@ const api = {
     ipcRenderer.invoke('teacher:mark-leave', studentId),
   clearLeave: (studentId: string): Promise<TeacherSnapshot> =>
     ipcRenderer.invoke('teacher:clear-leave', studentId),
+  resetCheckin: (studentId: string): Promise<TeacherSnapshot> =>
+    ipcRenderer.invoke('teacher:reset-checkin', studentId),
+  resetSessionCheckins: (): Promise<TeacherSnapshot> =>
+    ipcRenderer.invoke('teacher:reset-session-checkins'),
   listArchivedSessions: (query: AttendanceArchiveQuery): Promise<AttendanceArchivePage> =>
     ipcRenderer.invoke('archive:list', query),
   getArchivedSession: (sessionId: string): Promise<ArchivedSessionDetail> =>
     ipcRenderer.invoke('archive:get', sessionId),
   updateArchivedSession: (sessionId: string, className: string): Promise<ArchivedSessionDetail> =>
     ipcRenderer.invoke('archive:update-session', sessionId, className),
-  updateArchivedEntry: (sessionId: string, studentId: string, update: ArchivedEntryUpdate): Promise<ArchivedSessionDetail> =>
+  updateArchivedEntry: (
+    sessionId: string,
+    studentId: string,
+    update: ArchivedEntryUpdate
+  ): Promise<ArchivedSessionDetail> =>
     ipcRenderer.invoke('archive:update-entry', sessionId, studentId, update),
   deleteArchivedEntry: (sessionId: string, studentId: string): Promise<ArchivedSessionDetail> =>
     ipcRenderer.invoke('archive:delete-entry', sessionId, studentId),

@@ -1,4 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, Tray } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  screen,
+  Tray
+} from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { extname, join } from 'node:path'
@@ -338,9 +348,7 @@ app.whenReady().then(async () => {
     let stopDiscovery: (() => Promise<void>) | undefined
     if (config.role === 'teacher') {
       if (config.schoolServerUrl) await schoolApi.restore()
-      attendanceArchive = new AttendanceArchive(
-        join(app.getPath('userData'), 'attendance.sqlite')
-      )
+      attendanceArchive = new AttendanceArchive(join(app.getPath('userData'), 'attendance.sqlite'))
       service = new TeacherService(
         join(app.getPath('userData'), 'teacher-state.json'),
         new SchoolServerDirectory(schoolApi),
@@ -499,7 +507,8 @@ app.whenReady().then(async () => {
       const wechatAppId = trimmed(settings.wechatAppId)
       const wechatRedirectUri = trimmed(settings.wechatRedirectUri)
       const listenPort = settings.listenPort
-      if (!schoolName || schoolName.length > 80) throw new Error('学校名称不能为空，且不能超过 80 个字符')
+      if (!schoolName || schoolName.length > 80)
+        throw new Error('学校名称不能为空，且不能超过 80 个字符')
       if (!schoolServerUrl || !wechatAppId || !wechatRedirectUri) {
         throw new Error('请填写学校服务地址、微信 AppID 和回调地址')
       }
@@ -517,10 +526,15 @@ app.whenReady().then(async () => {
         } catch {
           throw new Error(`${label}格式不正确`)
         }
-        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(`${label}必须使用 HTTP 或 HTTPS`)
+        if (!['http:', 'https:'].includes(parsed.protocol))
+          throw new Error(`${label}必须使用 HTTP 或 HTTPS`)
       }
       if (wechatAppId.length > 120) throw new Error('微信 AppID 不能超过 120 个字符')
-      if (!Number.isInteger(listenPort) || (listenPort as number) < 1024 || (listenPort as number) > 65535) {
+      if (
+        !Number.isInteger(listenPort) ||
+        (listenPort as number) < 1024 ||
+        (listenPort as number) > 65535
+      ) {
         throw new Error('服务端口须为 1024 到 65535 之间的整数')
       }
       const next: AppConfig = {
@@ -634,14 +648,27 @@ app.whenReady().then(async () => {
       if (typeof studentId !== 'string' || studentId.length > 100) throw new Error('学生参数无效')
       return requireService().clearLeave(studentId)
     })
+    ipcMain.handle('teacher:reset-checkin', async (event, studentId: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      if (typeof studentId !== 'string' || studentId.length > 100) throw new Error('学生参数无效')
+      return requireService().resetCheckin(studentId)
+    })
+    ipcMain.handle('teacher:reset-session-checkins', async (event) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      return requireService().resetSessionCheckins()
+    })
     ipcMain.handle('archive:list', (event, query: unknown) => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
-      if (!query || typeof query !== 'object' || Array.isArray(query)) throw new Error('查询条件无效')
+      if (!query || typeof query !== 'object' || Array.isArray(query))
+        throw new Error('查询条件无效')
       const value = query as AttendanceArchiveQuery
-      if ((value.from != null && typeof value.from !== 'string') ||
-          (value.to != null && typeof value.to !== 'string') ||
-          (value.keyword != null && typeof value.keyword !== 'string') ||
-          (value.page != null && typeof value.page !== 'number')) throw new Error('查询条件无效')
+      if (
+        (value.from != null && typeof value.from !== 'string') ||
+        (value.to != null && typeof value.to !== 'string') ||
+        (value.keyword != null && typeof value.keyword !== 'string') ||
+        (value.page != null && typeof value.page !== 'number')
+      )
+        throw new Error('查询条件无效')
       return requireArchive().list(value)
     })
     ipcMain.handle('archive:get', (event, sessionId: unknown) => {
@@ -653,15 +680,22 @@ app.whenReady().then(async () => {
       if (typeof className !== 'string') throw new Error('班级名称无效')
       return requireArchive().updateSession(archiveId(sessionId), className)
     })
-    ipcMain.handle('archive:update-entry', (event, sessionId: unknown, studentId: unknown, update: unknown) => {
-      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
-      if (!update || typeof update !== 'object' || Array.isArray(update)) throw new Error('考勤修改内容无效')
-      const value = update as ArchivedEntryUpdate
-      if (typeof value.attendance !== 'string' ||
+    ipcMain.handle(
+      'archive:update-entry',
+      (event, sessionId: unknown, studentId: unknown, update: unknown) => {
+        if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+        if (!update || typeof update !== 'object' || Array.isArray(update))
+          throw new Error('考勤修改内容无效')
+        const value = update as ArchivedEntryUpdate
+        if (
+          typeof value.attendance !== 'string' ||
           (value.signedAt != null && typeof value.signedAt !== 'string') ||
-          (value.stationId != null && typeof value.stationId !== 'string')) throw new Error('考勤修改内容无效')
-      return requireArchive().updateEntry(archiveId(sessionId), archiveId(studentId), value)
-    })
+          (value.stationId != null && typeof value.stationId !== 'string')
+        )
+          throw new Error('考勤修改内容无效')
+        return requireArchive().updateEntry(archiveId(sessionId), archiveId(studentId), value)
+      }
+    )
     ipcMain.handle('archive:delete-entry', (event, sessionId: unknown, studentId: unknown) => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       return requireArchive().deleteEntry(archiveId(sessionId), archiveId(studentId))

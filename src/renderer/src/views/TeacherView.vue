@@ -21,6 +21,7 @@ import {
   PanelLeftOpen,
   PanelTop,
   Plus,
+  RotateCcw,
   Settings2,
   ShieldCheck,
   Square,
@@ -93,7 +94,9 @@ const serviceReady = computed(() => !runtime.value?.serverError)
 const needsInitialSetup = computed(
   () =>
     !!runtime.value &&
-    (!runtime.value.schoolServerUrl || !runtime.value.wechatAppId || !runtime.value.wechatRedirectUri)
+    (!runtime.value.schoolServerUrl ||
+      !runtime.value.wechatAppId ||
+      !runtime.value.wechatRedirectUri)
 )
 const selectedClass = computed(
   () => classes.value.find((item) => item.id === selectedClassId.value) ?? null
@@ -149,6 +152,25 @@ async function endCurrentSession(): Promise<void> {
 function toggleLeave(entry: { studentId: string; attendance: string }): void {
   if (entry.attendance === 'leave') void teacherStore.clearLeave(entry.studentId)
   else void teacherStore.markLeave(entry.studentId)
+}
+
+function resetEntryCheckin(entry: { studentId: string; studentName: string }): void {
+  if (!window.confirm(`确定让 ${entry.studentName} 重新签到吗？将清除该学生本场的签到记录。`)) {
+    return
+  }
+  void teacherStore.resetCheckin(entry.studentId)
+}
+
+function resetAllCheckins(): void {
+  if (!snapshot.value?.session?.active || !rosterStats.value.signed) return
+  if (
+    !window.confirm(
+      `确定让全班重新签到吗？将清除本场 ${rosterStats.value.signed} 名学生的签到记录，请假标记保留。`
+    )
+  ) {
+    return
+  }
+  void teacherStore.resetSessionCheckins()
 }
 
 async function logoutSchool(): Promise<void> {
@@ -211,7 +233,9 @@ onUnmounted(() => {
           <GraduationCap v-else :size="20" :stroke-width="2.2" />
         </div>
         <div v-if="!sidebarCollapsed" class="min-w-0 flex-1 leading-tight">
-          <p class="m-0 truncate text-sm font-bold tracking-wide">{{ runtime?.schoolName || '学校名称' }}</p>
+          <p class="m-0 truncate text-sm font-bold tracking-wide">
+            {{ runtime?.schoolName || '学校名称' }}
+          </p>
           <p class="m-0 mt-1 text-[11px] text-muted-foreground">教师工作台</p>
         </div>
         <Button
@@ -582,89 +606,110 @@ onUnmounted(() => {
           </div>
           <AttendanceHistory v-if="recordsTab === 'history'" />
           <template v-else>
-          <div class="mb-6 flex items-end justify-between gap-5">
-            <div>
-              <div
-                class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary"
-              >
-                <ListChecks :size="14" />签到明细
+            <div class="mb-6 flex items-end justify-between gap-5">
+              <div>
+                <div
+                  class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary"
+                >
+                  <ListChecks :size="14" />签到明细
+                </div>
+                <h1 class="m-0 text-2xl font-bold tracking-tight">签到记录</h1>
+                <p class="mb-0 mt-2 text-sm text-muted-foreground">
+                  {{
+                    snapshot?.session
+                      ? `${snapshot.session.className} · ${snapshot.session.active ? '本场进行中' : '本场已结束'}`
+                      : '当前没有场次'
+                  }}
+                </p>
               </div>
-              <h1 class="m-0 text-2xl font-bold tracking-tight">签到记录</h1>
-              <p class="mb-0 mt-2 text-sm text-muted-foreground">
-                {{
-                  snapshot?.session
-                    ? `${snapshot.session.className} · ${snapshot.session.active ? '本场进行中' : '本场已结束'}`
-                    : '当前没有场次'
-                }}
-              </p>
+              <div v-if="snapshot?.roster" class="flex flex-wrap items-center justify-end gap-2">
+                <Badge variant="outline">应到 {{ rosterStats.total }} 人</Badge>
+                <Badge variant="secondary">实到 {{ rosterStats.signed }} 人</Badge>
+                <Badge variant="outline" class="leave-badge">请假 {{ rosterStats.leave }} 人</Badge>
+                <Badge variant="outline" class="absent-badge"
+                  >未到 {{ rosterStats.absent }} 人</Badge
+                >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="busy || !snapshot?.session?.active || rosterStats.signed === 0"
+                  @click="resetAllCheckins"
+                >
+                  <RotateCcw :size="14" />全班重新签到
+                </Button>
+              </div>
             </div>
-            <div v-if="snapshot?.roster" class="flex items-center gap-2">
-              <Badge variant="outline">应到 {{ rosterStats.total }} 人</Badge>
-              <Badge variant="secondary">实到 {{ rosterStats.signed }} 人</Badge>
-              <Badge variant="outline" class="leave-badge">请假 {{ rosterStats.leave }} 人</Badge>
-              <Badge variant="outline" class="absent-badge">未到 {{ rosterStats.absent }} 人</Badge>
-            </div>
-          </div>
-          <p v-if="snapshot?.rosterNotice" class="roster-notice mb-4">
-            <TriangleAlert :size="15" />
-            <span>{{ snapshot.rosterNotice }}</span>
-          </p>
-          <Card class="content-panel overflow-hidden p-0">
-            <div v-if="snapshot?.roster" class="overflow-x-auto">
-              <table class="w-full border-collapse text-left text-sm">
-                <thead>
-                  <tr>
-                    <th>学生</th>
-                    <th>状态</th>
-                    <th>签到时间</th>
-                    <th>电脑名称</th>
-                    <th>身份证后四位</th>
-                    <th class="w-28">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="entry in snapshot.roster" :key="entry.studentId">
-                    <td>
-                      <div class="flex items-center gap-3">
-                        <span class="record-avatar">{{ entry.studentName.slice(0, 1) }}</span
-                        ><strong>{{ entry.studentName }}</strong>
-                      </div>
-                    </td>
-                    <td>
-                      <Badge v-if="entry.attendance === 'signed'" variant="secondary"
-                        ><Check :size="12" />已签到</Badge
-                      >
-                      <Badge
-                        v-else-if="entry.attendance === 'leave'"
-                        variant="outline"
-                        class="leave-badge"
-                        ><CalendarOff :size="12" />已请假</Badge
-                      >
-                      <Badge v-else variant="outline">未签到</Badge>
-                    </td>
-                    <td class="tabular-nums">
-                      {{ entry.signedAt ? new Date(entry.signedAt).toLocaleString('zh-CN') : '—' }}
-                    </td>
-                    <td>{{ entry.stationId ?? '—' }}</td>
-                    <td class="tabular-nums">****{{ entry.idCardLast4 }}</td>
-                    <td>
-                      <Button
-                        v-if="entry.attendance !== 'signed'"
-                        variant="ghost"
-                        size="sm"
-                        class="leave-toggle"
-                        @click="toggleLeave(entry)"
-                        >{{ entry.attendance === 'leave' ? '取消请假' : '标记请假' }}</Button
-                      >
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div v-else class="empty-records large-empty">
-              {{ snapshot?.session ? '本场次没有名单数据' : '开启场次后显示班级名单与签到状态' }}
-            </div>
-          </Card>
+            <p v-if="snapshot?.rosterNotice" class="roster-notice mb-4">
+              <TriangleAlert :size="15" />
+              <span>{{ snapshot.rosterNotice }}</span>
+            </p>
+            <Card class="content-panel overflow-hidden p-0">
+              <div v-if="snapshot?.roster" class="overflow-x-auto">
+                <table class="w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr>
+                      <th>学生</th>
+                      <th>状态</th>
+                      <th>签到时间</th>
+                      <th>电脑名称</th>
+                      <th>身份证后四位</th>
+                      <th class="w-28">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="entry in snapshot.roster" :key="entry.studentId">
+                      <td>
+                        <div class="flex items-center gap-3">
+                          <span class="record-avatar">{{ entry.studentName.slice(0, 1) }}</span
+                          ><strong>{{ entry.studentName }}</strong>
+                        </div>
+                      </td>
+                      <td>
+                        <Badge v-if="entry.attendance === 'signed'" variant="secondary"
+                          ><Check :size="12" />已签到</Badge
+                        >
+                        <Badge
+                          v-else-if="entry.attendance === 'leave'"
+                          variant="outline"
+                          class="leave-badge"
+                          ><CalendarOff :size="12" />已请假</Badge
+                        >
+                        <Badge v-else variant="outline">未签到</Badge>
+                      </td>
+                      <td class="tabular-nums">
+                        {{
+                          entry.signedAt ? new Date(entry.signedAt).toLocaleString('zh-CN') : '—'
+                        }}
+                      </td>
+                      <td>{{ entry.stationId ?? '—' }}</td>
+                      <td class="tabular-nums">****{{ entry.idCardLast4 }}</td>
+                      <td>
+                        <Button
+                          v-if="entry.attendance === 'signed'"
+                          variant="ghost"
+                          size="sm"
+                          class="reset-checkin"
+                          :disabled="busy || !snapshot?.session?.active"
+                          @click="resetEntryCheckin(entry)"
+                          >重新签到</Button
+                        >
+                        <Button
+                          v-else
+                          variant="ghost"
+                          size="sm"
+                          class="leave-toggle"
+                          @click="toggleLeave(entry)"
+                          >{{ entry.attendance === 'leave' ? '取消请假' : '标记请假' }}</Button
+                        >
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else class="empty-records large-empty">
+                {{ snapshot?.session ? '本场次没有名单数据' : '开启场次后显示班级名单与签到状态' }}
+              </div>
+            </Card>
           </template>
         </div>
 
@@ -1585,6 +1630,10 @@ table td strong {
   color: #b4741c;
 }
 
+.reset-checkin {
+  color: #3478f6;
+}
+
 :global(:root[data-theme='dark']) .leave-badge {
   color: #f4ce78;
   background: rgba(217, 145, 43, 0.14);
@@ -1592,6 +1641,10 @@ table td strong {
 
 :global(:root[data-theme='dark']) .leave-toggle {
   color: #f4ce78;
+}
+
+:global(:root[data-theme='dark']) .reset-checkin {
+  color: #8ab4ff;
 }
 
 :global(:root[data-theme='dark']) .roster-notice {

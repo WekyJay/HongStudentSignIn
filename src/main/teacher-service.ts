@@ -73,9 +73,16 @@ export class TeacherService {
         archivedSessionId: persisted.archivedSessionId
       }
       // 将旧版本状态文件里最后一个已结束场次补入历史库，仅迁移一次。
-      if (this.state.session && !this.state.session.active &&
-          this.state.archivedSessionId !== this.state.session.id) {
-        this.archive.archive(this.state.session, this.snapshot().roster ?? [], this.state.rosterNotice)
+      if (
+        this.state.session &&
+        !this.state.session.active &&
+        this.state.archivedSessionId !== this.state.session.id
+      ) {
+        this.archive.archive(
+          this.state.session,
+          this.snapshot().roster ?? [],
+          this.state.rosterNotice
+        )
         this.clearCurrentSession()
         await this.save()
       }
@@ -196,6 +203,33 @@ export class TeacherService {
       this.state.leave = next
       await this.save()
     }
+    return this.snapshot()
+  }
+
+  /** 清除单个学生在本场的签到记录，学生可在学生端重新签到 */
+  async resetCheckin(studentId: string): Promise<TeacherSnapshot> {
+    if (!this.state.session?.active) throw new Error('当前没有进行中的签到场次')
+    if (!this.state.roster?.some((student) => student.studentId === studentId)) {
+      throw new Error('该学生不在当前班级名单中')
+    }
+    const sessionId = this.state.session.id
+    const next = this.state.checkins.filter(
+      (record) => !(record.sessionId === sessionId && record.studentId === studentId)
+    )
+    if (next.length === this.state.checkins.length) throw new Error('该学生尚未签到，无需重新签到')
+    this.state.checkins = next
+    await this.save()
+    return this.snapshot()
+  }
+
+  /** 清除全班在本场的签到记录（请假标记保留），学生可重新签到 */
+  async resetSessionCheckins(): Promise<TeacherSnapshot> {
+    if (!this.state.session?.active) throw new Error('当前没有进行中的签到场次')
+    const sessionId = this.state.session.id
+    const next = this.state.checkins.filter((record) => record.sessionId !== sessionId)
+    if (next.length === this.state.checkins.length) throw new Error('本场还没有签到记录')
+    this.state.checkins = next
+    await this.save()
     return this.snapshot()
   }
 

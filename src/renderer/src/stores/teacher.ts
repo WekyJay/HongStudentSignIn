@@ -88,6 +88,30 @@ export const useTeacherStore = defineStore('teacher', () => {
     }
   }
 
+  async function resetCheckin(studentId: string): Promise<void> {
+    busy.value = true
+    error.value = ''
+    try {
+      snapshot.value = await window.signIn.resetCheckin(studentId)
+    } catch (cause) {
+      error.value = (cause as Error).message
+    } finally {
+      busy.value = false
+    }
+  }
+
+  async function resetSessionCheckins(): Promise<void> {
+    busy.value = true
+    error.value = ''
+    try {
+      snapshot.value = await window.signIn.resetSessionCheckins()
+    } catch (cause) {
+      error.value = (cause as Error).message
+    } finally {
+      busy.value = false
+    }
+  }
+
   return {
     snapshot,
     error,
@@ -100,6 +124,8 @@ export const useTeacherStore = defineStore('teacher', () => {
     startSession,
     stopSession,
     markLeave,
-    clearLeave
+    clearLeave,
+    resetCheckin,
+    resetSessionCheckins
   }
 })
