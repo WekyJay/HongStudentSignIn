@@ -4,6 +4,7 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 export interface AppConfig {
   role: AppRole
   stationId: string
+  /** 学生端留空时通过局域网自动发现教师端 */
   teacherUrl: string
   listenHost: string
   listenPort: number
@@ -25,7 +26,17 @@ export interface RuntimeInfo {
   wechatAppId: string
   wechatRedirectUri: string
   configPath: string
+  appSettings: AppSettings
   serverError?: string
+}
+
+export interface AppSettings {
+  schoolName: string
+  schoolLogoPath: string
+  schoolServerUrl: string
+  wechatAppId: string
+  wechatRedirectUri: string
+  listenPort: number
 }
 
 export interface SchoolAuthState {
@@ -86,6 +97,7 @@ export interface PublicSession {
   id: string
   classId: string
   className: string
+  schoolName?: string
   /** 班级所属学部/部门，来自学校班级列表，可能为空 */
   departmentName?: string
   startedAt: string
@@ -108,6 +120,49 @@ export interface TeacherSnapshot {
   /** 名单与学校数据不一致时的提示（人数不符、记录缺失等），null 表示完整 */
   rosterNotice: string | null
   directoryReady: boolean
+}
+
+export interface AttendanceArchiveQuery {
+  from?: string
+  to?: string
+  keyword?: string
+  page?: number
+}
+
+export interface ArchivedSession {
+  id: string
+  classId: string
+  className: string
+  departmentName?: string
+  startedAt: string
+  endedAt: string
+  total: number
+  signed: number
+  leave: number
+  absent: number
+  rosterNotice: string | null
+}
+
+export interface ArchivedEntry extends RosterEntry {
+  sessionId: string
+}
+
+export interface ArchivedSessionDetail {
+  session: ArchivedSession
+  entries: ArchivedEntry[]
+}
+
+export interface AttendanceArchivePage {
+  items: ArchivedSession[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface ArchivedEntryUpdate {
+  attendance: AttendanceStatus
+  signedAt?: string
+  stationId?: string
 }
 
 export interface CheckinRequest {

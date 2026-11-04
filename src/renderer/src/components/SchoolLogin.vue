@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Minus, X } from '@lucide/vue'
+import { Minus, Settings2, X } from '@lucide/vue'
 import Button from './ui/button/Button.vue'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSchoolStore } from '../stores/school'
@@ -11,6 +11,7 @@ const schoolStore = useSchoolStore()
 const { runtime } = storeToRefs(runtimeStore)
 const wechatError = ref('')
 let removeWechatListener: (() => void) | undefined
+const emit = defineEmits<{ openSettings: [] }>()
 
 const qrUrl = computed(() => {
   const info = runtime.value
@@ -82,11 +83,14 @@ onUnmounted(() => removeWechatListener?.())
 
       <div class="qr-card">
         <iframe v-if="qrUrl" :src="qrUrl" class="qr-frame" title="微信扫码登录"></iframe>
-        <p v-else class="qr-loading">{{ runtime ? '请在本机配置学校微信登录参数' : '正在加载配置…' }}</p>
+        <p v-else class="qr-loading">{{ runtime ? '请先完成教师端设置' : '正在加载学校信息…' }}</p>
       </div>
 
       <p class="login-tip">打开微信扫一扫，扫码确认后即可登录</p>
       <p v-if="wechatError" class="login-error">{{ wechatError }}</p>
+      <Button variant="link" size="sm" class="login-settings" @click="emit('openSettings')">
+        <Settings2 :size="14" />学校与网络设置
+      </Button>
     </div>
   </main>
 </template>
@@ -118,6 +122,10 @@ onUnmounted(() => removeWechatListener?.())
   font-size: 19px;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+.login-settings {
+  margin-top: 15px;
+  color: hsl(var(--muted-foreground));
 }
 
 .qr-card {

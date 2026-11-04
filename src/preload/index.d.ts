@@ -1,5 +1,10 @@
 import type {
+  ArchivedEntryUpdate,
+  ArchivedSessionDetail,
+  AttendanceArchivePage,
+  AttendanceArchiveQuery,
   CheckinResult,
+  AppSettings,
   PublicSession,
   RuntimeInfo,
   SchoolAuthState,
@@ -13,6 +18,8 @@ declare global {
   interface Window {
     signIn: {
       getRuntimeInfo(): Promise<RuntimeInfo>
+      saveAppSettings(settings: AppSettings): Promise<void>
+      selectSchoolLogo(): Promise<{ path: string; preview: string } | null>
       getSchoolStatus(): Promise<SchoolAuthState>
       schoolLogout(): Promise<SchoolAuthState>
       getSchoolProfile(force?: boolean): Promise<SchoolProfile>
@@ -27,6 +34,13 @@ declare global {
       stopSession(): Promise<TeacherSnapshot>
       markLeave(studentId: string): Promise<TeacherSnapshot>
       clearLeave(studentId: string): Promise<TeacherSnapshot>
+      listArchivedSessions(query: AttendanceArchiveQuery): Promise<AttendanceArchivePage>
+      getArchivedSession(sessionId: string): Promise<ArchivedSessionDetail>
+      updateArchivedSession(sessionId: string, className: string): Promise<ArchivedSessionDetail>
+      updateArchivedEntry(sessionId: string, studentId: string, update: ArchivedEntryUpdate): Promise<ArchivedSessionDetail>
+      deleteArchivedEntry(sessionId: string, studentId: string): Promise<ArchivedSessionDetail>
+      deleteArchivedSession(sessionId: string): Promise<void>
+      exportArchivedSession(sessionId: string): Promise<string | null>
       getStudentSession(): Promise<PublicSession | null>
       checkin(sessionId: string, idCard: string): Promise<CheckinResult>
       minimizeWindow(): Promise<void>

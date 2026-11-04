@@ -39,7 +39,10 @@ export async function startTeacherServer(
         return
       }
       if (request.method === 'GET' && path === '/api/v1/session') {
-        json(response, 200, { session: service.publicSession() })
+        const session = service.publicSession()
+        json(response, 200, {
+          session: session ? { ...session, schoolName: config.schoolName } : null
+        })
         return
       }
       if (request.method === 'POST' && path === '/api/v1/checkins') {

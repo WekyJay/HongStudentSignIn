@@ -1,10 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Tray } from 'electron'
-import { existsSync, readFileSync } from 'node:fs'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, Tray } from 'electron'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { extname, join } from 'node:path'
 import type { NativeImage } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import type {
   AppConfig,
+  AppSettings,
+  ArchivedEntryUpdate,
+  AttendanceArchiveQuery,
   CheckinResult,
   PublicSession,
   RuntimeInfo,
@@ -15,8 +19,11 @@ import type {
 import { applyUserDataDir, loadConfig, resolveBuildRole } from './config'
 import { SchoolServerDirectory } from './directory'
 import { startTeacherServer } from './http-server'
+import { discoverTeacherUrl, getTeacherLanUrl, startTeacherDiscovery } from './teacher-discovery'
 import { SchoolApiClient } from './school-api'
 import { TeacherService } from './teacher-service'
+import { AttendanceArchive } from './attendance-archive'
+import { exportAttendanceExcel } from './attendance-export'
 
 // 教师端、学生端分开打包时，由安装包内的 signinRole 决定默认角色与用户数据目录
 const buildRole = resolveBuildRole()
@@ -45,7 +52,7 @@ function loadImageDataUrl(path: string): string | null {
 
 function loadSchoolLogo(path: string | undefined): string | null {
   const customLogo = path ? loadImageDataUrl(path) : null
-  return customLogo ?? loadImageDataUrl(join(__dirname, '../../resources/default-icon.png'))
+  return customLogo ?? loadImageDataUrl(join(__dirname, '../../resources/school-logo.png'))
 }
 
 function applicationIconPath(): string {
@@ -80,6 +87,7 @@ let teacherTray: Tray | null = null
 // 微信扫码回调由主进程统一处理（will-navigate 处理顶层跳转，webRequest 处理 iframe 内跳转）
 let wechatCallbackHandler: ((url: string) => void) | null = null
 let lastWechatCallbackUrl = ''
+let discoveredTeacherUrl: string | undefined
 
 function handleWechatCallback(url: string): void {
   if (url === lastWechatCallbackUrl) return
@@ -91,12 +99,20 @@ function windowBackground(): string {
   return nativeTheme.shouldUseDarkColors ? '#18191b' : '#f7f9fc'
 }
 
-function createWindow(config: AppConfig): BrowserWindow {
+function createWindow(config: AppConfig, teacherAuthenticated: boolean): BrowserWindow {
   // 学生端正常运行时静默驻留托盘，等教师开启场次后再弹出 kiosk
   const studentKiosk = config.role === 'student' && !uiPreview
+  const teacherSetupComplete = Boolean(
+    config.schoolServerUrl && config.wechatAppId && config.wechatRedirectUri
+  )
+  const compactTeacherWindow = !teacherSetupComplete || !teacherAuthenticated
+  const teacherHeight = Math.min(
+    teacherSetupComplete ? 760 : 860,
+    Math.max(600, screen.getPrimaryDisplay().workAreaSize.height - 32)
+  )
   const window = new BrowserWindow({
-    width: config.role === 'teacher' ? 1100 : 850,
-    height: 760,
+    width: config.role === 'teacher' ? (compactTeacherWindow ? 820 : 1100) : 850,
+    height: config.role === 'teacher' ? teacherHeight : 760,
     minWidth: 700,
     minHeight: 600,
     show: false,
@@ -160,14 +176,18 @@ function createWindow(config: AppConfig): BrowserWindow {
 }
 
 async function fetchTeacher<T>(config: AppConfig, path: string, init?: RequestInit): Promise<T> {
+  const teacherUrl = config.teacherUrl || (discoveredTeacherUrl ??= await discoverTeacherUrl())
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    const response = await fetch(new URL(path, config.teacherUrl), {
+    const response = await fetch(new URL(path, teacherUrl), {
       ...init,
       signal: controller.signal
     })
     return (await response.json()) as T
+  } catch (error) {
+    if (!config.teacherUrl) discoveredTeacherUrl = undefined
+    throw error
   } finally {
     clearTimeout(timer)
   }
@@ -312,17 +332,24 @@ app.whenReady().then(async () => {
       join(app.getPath('userData'), 'school-auth.json')
     )
     let service: TeacherService | null = null
+    let attendanceArchive: AttendanceArchive | null = null
     let serverError: string | undefined
     let stopServer: (() => Promise<void>) | undefined
+    let stopDiscovery: (() => Promise<void>) | undefined
     if (config.role === 'teacher') {
-      await schoolApi.restore()
+      if (config.schoolServerUrl) await schoolApi.restore()
+      attendanceArchive = new AttendanceArchive(
+        join(app.getPath('userData'), 'attendance.sqlite')
+      )
       service = new TeacherService(
         join(app.getPath('userData'), 'teacher-state.json'),
-        new SchoolServerDirectory(schoolApi)
+        new SchoolServerDirectory(schoolApi),
+        attendanceArchive
       )
       await service.load()
       try {
         stopServer = await startTeacherServer(config, service)
+        stopDiscovery = await startTeacherDiscovery(config)
       } catch (error) {
         serverError = (error as Error).message
       }
@@ -333,7 +360,7 @@ app.whenReady().then(async () => {
       serverUrl: config.schoolServerUrl || ''
     })
 
-    mainWindow = createWindow(config)
+    mainWindow = createWindow(config, schoolApi.loggedIn)
     if (config.role === 'student' && !uiPreview) {
       // 学生端静默驻留托盘：灰色=连不上教师端，等教师开场次后自动弹出 kiosk
       createStudentTray()
@@ -357,6 +384,10 @@ app.whenReady().then(async () => {
         try {
           if (!code) throw new Error('微信回调缺少授权码')
           await schoolApi.loginWithWechat(code, state)
+          if (mainWindow && !mainWindow.isMaximized()) {
+            mainWindow.setSize(1100, 760)
+            mainWindow.center()
+          }
           mainWindow?.webContents.send('school:wechat-result', {
             ok: true,
             auth: schoolAuthState()
@@ -418,8 +449,16 @@ app.whenReady().then(async () => {
         role: config.role,
         schoolName: config.schoolName || '学校名称',
         schoolLogoDataUrl: loadSchoolLogo(config.schoolLogoPath),
-        stationId: config.stationId,
-        teacherUrl: config.teacherUrl,
+        appSettings: {
+          schoolName: config.schoolName || '学校名称',
+          schoolLogoPath: config.schoolLogoPath || '',
+          schoolServerUrl: config.schoolServerUrl || '',
+          wechatAppId: config.wechatAppId || '',
+          wechatRedirectUri: config.wechatRedirectUri || '',
+          listenPort: config.listenPort
+        },
+        stationId: hostname(),
+        teacherUrl: config.role === 'teacher' ? getTeacherLanUrl(config) : config.teacherUrl,
         schoolServerUrl: config.schoolServerUrl || '',
         wechatAppId: config.wechatAppId!,
         wechatRedirectUri: config.wechatRedirectUri!,
@@ -428,9 +467,91 @@ app.whenReady().then(async () => {
       }
     })
 
+    ipcMain.handle(
+      'settings:select-logo',
+      async (event): Promise<{ path: string; preview: string } | null> => {
+        if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+        const options = {
+          title: '选择学校 Logo',
+          properties: ['openFile'] as Array<'openFile'>,
+          filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+        }
+        const result = mainWindow
+          ? await dialog.showOpenDialog(mainWindow, options)
+          : await dialog.showOpenDialog(options)
+        if (result.canceled || !result.filePaths[0]) return null
+        const preview = loadImageDataUrl(result.filePaths[0])
+        if (!preview) {
+          throw new Error('Logo 无法读取或超过 2 MiB，请选择 PNG、JPEG、WebP 或 GIF 图片')
+        }
+        return { path: result.filePaths[0], preview }
+      }
+    )
+
+    ipcMain.handle('settings:save', (event, value: unknown): void => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      if (!value || typeof value !== 'object') throw new Error('设置内容无效')
+      const settings = value as Partial<AppSettings>
+      const trimmed = (input: unknown): string => (typeof input === 'string' ? input.trim() : '')
+      const schoolName = trimmed(settings.schoolName)
+      const schoolLogoPath = trimmed(settings.schoolLogoPath)
+      const schoolServerUrl = trimmed(settings.schoolServerUrl)
+      const wechatAppId = trimmed(settings.wechatAppId)
+      const wechatRedirectUri = trimmed(settings.wechatRedirectUri)
+      const listenPort = settings.listenPort
+      if (!schoolName || schoolName.length > 80) throw new Error('学校名称不能为空，且不能超过 80 个字符')
+      if (!schoolServerUrl || !wechatAppId || !wechatRedirectUri) {
+        throw new Error('请填写学校服务地址、微信 AppID 和回调地址')
+      }
+      if (schoolLogoPath && !loadImageDataUrl(schoolLogoPath)) {
+        throw new Error('Logo 无法读取或超过 2 MiB，请重新选择图片')
+      }
+      for (const [label, value] of [
+        ['学校服务地址', schoolServerUrl],
+        ['微信回调地址', wechatRedirectUri]
+      ]) {
+        if (!value) continue
+        let parsed: URL
+        try {
+          parsed = new URL(value)
+        } catch {
+          throw new Error(`${label}格式不正确`)
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(`${label}必须使用 HTTP 或 HTTPS`)
+      }
+      if (wechatAppId.length > 120) throw new Error('微信 AppID 不能超过 120 个字符')
+      if (!Number.isInteger(listenPort) || (listenPort as number) < 1024 || (listenPort as number) > 65535) {
+        throw new Error('服务端口须为 1024 到 65535 之间的整数')
+      }
+      const next: AppConfig = {
+        ...config,
+        schoolName,
+        schoolLogoPath,
+        schoolServerUrl,
+        wechatAppId,
+        wechatRedirectUri,
+        listenPort: listenPort as number
+      }
+      const temporaryPath = `${configPath}.tmp`
+      writeFileSync(temporaryPath, JSON.stringify(next, null, 2), 'utf8')
+      renameSync(temporaryPath, configPath)
+      app.relaunch()
+      setTimeout(() => app.exit(0), 250)
+    })
+
     const requireService = (): TeacherService => {
       if (!service) throw new Error('教师服务未启用')
       return service
+    }
+    const requireArchive = (): AttendanceArchive => {
+      if (!attendanceArchive) throw new Error('教师端历史记录未启用')
+      return attendanceArchive
+    }
+    const archiveId = (value: unknown): string => {
+      if (typeof value !== 'string' || !value.trim() || value.length > 100) {
+        throw new Error('历史记录参数无效')
+      }
+      return value
     }
 
     ipcMain.handle('school:status', (event): SchoolAuthState => {
@@ -440,6 +561,10 @@ app.whenReady().then(async () => {
     ipcMain.handle('school:logout', async (event): Promise<SchoolAuthState> => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       await schoolApi.logout()
+      if (mainWindow && !mainWindow.isMaximized()) {
+        mainWindow.setSize(820, 760)
+        mainWindow.center()
+      }
       return schoolAuthState()
     })
     ipcMain.handle('school:profile', async (event, force: unknown): Promise<SchoolProfile> => {
@@ -509,6 +634,58 @@ app.whenReady().then(async () => {
       if (typeof studentId !== 'string' || studentId.length > 100) throw new Error('学生参数无效')
       return requireService().clearLeave(studentId)
     })
+    ipcMain.handle('archive:list', (event, query: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      if (!query || typeof query !== 'object' || Array.isArray(query)) throw new Error('查询条件无效')
+      const value = query as AttendanceArchiveQuery
+      if ((value.from != null && typeof value.from !== 'string') ||
+          (value.to != null && typeof value.to !== 'string') ||
+          (value.keyword != null && typeof value.keyword !== 'string') ||
+          (value.page != null && typeof value.page !== 'number')) throw new Error('查询条件无效')
+      return requireArchive().list(value)
+    })
+    ipcMain.handle('archive:get', (event, sessionId: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      return requireArchive().get(archiveId(sessionId))
+    })
+    ipcMain.handle('archive:update-session', (event, sessionId: unknown, className: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      if (typeof className !== 'string') throw new Error('班级名称无效')
+      return requireArchive().updateSession(archiveId(sessionId), className)
+    })
+    ipcMain.handle('archive:update-entry', (event, sessionId: unknown, studentId: unknown, update: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      if (!update || typeof update !== 'object' || Array.isArray(update)) throw new Error('考勤修改内容无效')
+      const value = update as ArchivedEntryUpdate
+      if (typeof value.attendance !== 'string' ||
+          (value.signedAt != null && typeof value.signedAt !== 'string') ||
+          (value.stationId != null && typeof value.stationId !== 'string')) throw new Error('考勤修改内容无效')
+      return requireArchive().updateEntry(archiveId(sessionId), archiveId(studentId), value)
+    })
+    ipcMain.handle('archive:delete-entry', (event, sessionId: unknown, studentId: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      return requireArchive().deleteEntry(archiveId(sessionId), archiveId(studentId))
+    })
+    ipcMain.handle('archive:delete-session', (event, sessionId: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      requireArchive().deleteSession(archiveId(sessionId))
+    })
+    ipcMain.handle('archive:export', async (event, sessionId: unknown): Promise<string | null> => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      const detail = requireArchive().get(archiveId(sessionId))
+      const safeName = detail.session.className.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 60)
+      const options = {
+        title: '导出签到记录',
+        defaultPath: `${safeName}-${detail.session.startedAt.slice(0, 10)}.xlsx`,
+        filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }]
+      }
+      const result = mainWindow
+        ? await dialog.showSaveDialog(mainWindow, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      await exportAttendanceExcel(detail, result.filePath)
+      return result.filePath
+    })
     ipcMain.handle('student:session', async (event): Promise<PublicSession | null> => {
       if (!permitted(event.sender.id, 'student')) throw new Error('无权访问')
       const data = await fetchTeacher<{ session: PublicSession | null }>(config, '/api/v1/session')
@@ -524,7 +701,7 @@ app.whenReady().then(async () => {
         return fetchTeacher<CheckinResult>(config, '/api/v1/checkins', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId, idCard, stationId: config.stationId })
+          body: JSON.stringify({ sessionId, idCard, stationId: hostname() })
         })
       }
     )
@@ -538,6 +715,8 @@ app.whenReady().then(async () => {
       allowStudentClose = true
       teacherQuitting = true
       if (stopServer) void stopServer()
+      if (stopDiscovery) void stopDiscovery()
+      attendanceArchive?.close()
     })
   } catch (error) {
     console.error('应用启动失败', error)

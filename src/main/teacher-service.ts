@@ -12,6 +12,7 @@ import type {
   TeacherSnapshot
 } from '../shared/contracts'
 import type { StudentDirectory } from './directory'
+import { AttendanceArchive } from './attendance-archive'
 import { isValidMainlandIdCard } from './identity'
 
 interface PersistedState {
@@ -20,6 +21,7 @@ interface PersistedState {
   roster: SessionStudent[] | null
   leave: string[]
   rosterNotice: string | null
+  archivedSessionId?: string
 }
 
 // 名单是签到核对的基础：人数不符或记录缺失时明确提示，避免出现“应到人数”被悄悄算错。
@@ -55,7 +57,8 @@ export class TeacherService {
 
   constructor(
     private readonly path: string,
-    private readonly directory: StudentDirectory
+    private readonly directory: StudentDirectory,
+    private readonly archive: AttendanceArchive
   ) {}
 
   async load(): Promise<void> {
@@ -66,7 +69,15 @@ export class TeacherService {
         checkins: persisted.checkins ?? [],
         roster: persisted.roster ?? null,
         leave: persisted.leave ?? [],
-        rosterNotice: persisted.rosterNotice ?? null
+        rosterNotice: persisted.rosterNotice ?? null,
+        archivedSessionId: persisted.archivedSessionId
+      }
+      // 将旧版本状态文件里最后一个已结束场次补入历史库，仅迁移一次。
+      if (this.state.session && !this.state.session.active &&
+          this.state.archivedSessionId !== this.state.session.id) {
+        this.archive.archive(this.state.session, this.snapshot().roster ?? [], this.state.rosterNotice)
+        this.clearCurrentSession()
+        await this.save()
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -116,8 +127,10 @@ export class TeacherService {
     departmentName?: string
   ): Promise<TeacherSnapshot> {
     if (!classId.trim() || !className.trim()) throw new Error('请选择要签到的班级')
+    if (this.state.session?.active) throw new Error('请先结束当前场次')
     if (!this.directory.ready) throw new Error('请先登录学校服务再开启签到')
     const { students, skipped, duplicates } = await this.directory.fetchClassRoster(classId.trim())
+    if (this.state.session?.active) throw new Error('请先结束当前场次')
     if (students.length === 0) throw new Error('该班级没有学生，无法开启签到')
     this.state = {
       session: {
@@ -128,22 +141,37 @@ export class TeacherService {
         startedAt: new Date().toISOString(),
         active: true
       },
-      checkins: this.state.checkins,
+      checkins: [],
       roster: students,
       leave: [],
-      rosterNotice: rosterNotice(students.length, expectedSize, skipped, duplicates)
+      rosterNotice: rosterNotice(students.length, expectedSize, skipped, duplicates),
+      archivedSessionId: undefined
     }
     await this.save()
     return this.snapshot()
   }
 
   async stopSession(): Promise<TeacherSnapshot> {
-    if (this.state.session) this.state.session = { ...this.state.session, active: false }
+    if (!this.state.session?.active) return this.snapshot()
+    this.archive.archive(this.state.session, this.snapshot().roster ?? [], this.state.rosterNotice)
+    this.clearCurrentSession()
     await this.save()
     return this.snapshot()
   }
 
+  private clearCurrentSession(): void {
+    this.state = {
+      session: null,
+      checkins: [],
+      roster: null,
+      leave: [],
+      rosterNotice: null,
+      archivedSessionId: this.state.session?.id
+    }
+  }
+
   async markLeave(studentId: string): Promise<TeacherSnapshot> {
+    if (!this.state.session?.active) throw new Error('当前没有进行中的签到场次')
     if (!this.state.roster?.some((student) => student.studentId === studentId)) {
       throw new Error('该学生不在当前班级名单中')
     }
@@ -162,6 +190,7 @@ export class TeacherService {
   }
 
   async clearLeave(studentId: string): Promise<TeacherSnapshot> {
+    if (!this.state.session?.active) throw new Error('当前没有进行中的签到场次')
     const next = this.state.leave.filter((id) => id !== studentId)
     if (next.length !== this.state.leave.length) {
       this.state.leave = next

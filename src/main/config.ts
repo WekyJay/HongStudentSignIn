@@ -48,8 +48,8 @@ export function loadConfig(defaultRole: AppRole = 'teacher'): {
     const initial: AppConfig = {
       role: defaultRole,
       stationId: hostname(),
-      teacherUrl: 'http://127.0.0.1:41731',
-      listenHost: '127.0.0.1',
+      teacherUrl: defaultRole === 'student' ? '' : 'http://127.0.0.1:41731',
+      listenHost: app.isPackaged && defaultRole === 'teacher' ? '0.0.0.0' : '127.0.0.1',
       listenPort: 41731,
       schoolName: '学校名称',
       schoolServerUrl: '',
@@ -59,6 +59,27 @@ export function loadConfig(defaultRole: AppRole = 'teacher'): {
     writeFileSync(path, JSON.stringify(initial, null, 2), 'utf8')
   }
   const config = JSON.parse(readFileSync(path, 'utf8')) as AppConfig
+  if (app.isPackaged) {
+    let migrated = false
+    // Old student configs pointed back to the student PC instead of discovering the teacher.
+    if (config.role === 'student' && config.teacherUrl === 'http://127.0.0.1:41731') {
+      config.teacherUrl = ''
+      migrated = true
+    }
+    // The old teacher default listened only on loopback, so LAN clients could not reach it.
+    if (config.role === 'teacher') {
+      if (['localhost', '127.0.0.1', '::1'].includes(config.listenHost)) {
+        config.listenHost = '0.0.0.0'
+        migrated = true
+      }
+      if (config.tls || config.teacherUrl.startsWith('https://')) {
+        delete config.tls
+        config.teacherUrl = `http://127.0.0.1:${config.listenPort}`
+        migrated = true
+      }
+    }
+    if (migrated) writeFileSync(path, JSON.stringify(config, null, 2), 'utf8')
+  }
   config.schoolName = config.schoolName?.trim() || '学校名称'
   config.schoolServerUrl ??= ''
   config.wechatAppId ??= ''
@@ -69,10 +90,11 @@ export function loadConfig(defaultRole: AppRole = 'teacher'): {
   if (!Number.isInteger(config.listenPort) || config.listenPort < 1 || config.listenPort > 65535) {
     throw new Error('config.listenPort 无效')
   }
-  const url = new URL(config.teacherUrl)
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('config.teacherUrl 协议无效')
-  if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
-    throw new Error('学生端访问非本机教师服务必须使用 HTTPS')
+  if (config.teacherUrl) {
+    const url = new URL(config.teacherUrl)
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('config.teacherUrl 协议无效')
+  } else if (config.role !== 'student') {
+    throw new Error('教师端必须配置学生端访问地址')
   }
   if (config.schoolServerUrl) {
     const schoolUrl = new URL(config.schoolServerUrl)
@@ -85,10 +107,6 @@ export function loadConfig(defaultRole: AppRole = 'teacher'): {
     if (!['http:', 'https:'].includes(redirectUrl.protocol)) {
       throw new Error('config.wechatRedirectUri 协议无效')
     }
-  }
-  if (config.role === 'teacher' && !['localhost', '127.0.0.1', '::1'].includes(config.listenHost)) {
-    if (!config.tls?.certPath || !config.tls?.keyPath)
-      throw new Error('教师服务监听局域网时必须配置 TLS 证书')
   }
   return { config, path }
 }

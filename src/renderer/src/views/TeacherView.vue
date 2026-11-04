@@ -32,6 +32,8 @@ import Button from '../components/ui/button/Button.vue'
 import Badge from '../components/ui/badge/Badge.vue'
 import Card from '../components/ui/card/Card.vue'
 import SchoolLogin from '../components/SchoolLogin.vue'
+import DeploymentSettings from '../components/DeploymentSettings.vue'
+import AttendanceHistory from '../components/AttendanceHistory.vue'
 import ClassPicker from '../components/ClassPicker.vue'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSchoolStore } from '../stores/school'
@@ -58,6 +60,8 @@ const { snapshot, error, busy } = storeToRefs(teacherStore)
 const { themeMode } = storeToRefs(preferencesStore)
 const selectedClassId = ref('')
 const activeSection = ref<TeacherSection>('overview')
+const recordsTab = ref<'current' | 'history'>('current')
+const settingsOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const maximized = ref(false)
 let removeWindowListener: (() => void) | undefined
@@ -86,6 +90,11 @@ const themeOptions: {
 const activeMenu = computed(() => menuItems.find((item) => item.id === activeSection.value)!)
 const recentCheckins = computed(() => (snapshot.value?.checkins ?? []).slice(-5).reverse())
 const serviceReady = computed(() => !runtime.value?.serverError)
+const needsInitialSetup = computed(
+  () =>
+    !!runtime.value &&
+    (!runtime.value.schoolServerUrl || !runtime.value.wechatAppId || !runtime.value.wechatRedirectUri)
+)
 const selectedClass = computed(
   () => classes.value.find((item) => item.id === selectedClassId.value) ?? null
 )
@@ -130,6 +139,13 @@ function startSelectedSession(): void {
   void teacherStore.startSession(target.id, target.className, target.size, target.departmentName)
 }
 
+async function endCurrentSession(): Promise<void> {
+  if (await teacherStore.stopSession()) {
+    recordsTab.value = 'history'
+    activeSection.value = 'records'
+  }
+}
+
 function toggleLeave(entry: { studentId: string; attendance: string }): void {
   if (entry.attendance === 'leave') void teacherStore.clearLeave(entry.studentId)
   else void teacherStore.markLeave(entry.studentId)
@@ -163,7 +179,16 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <SchoolLogin v-if="!schoolAuth?.loggedIn" />
+  <DeploymentSettings
+    v-if="runtime && (needsInitialSetup || (!schoolAuth?.loggedIn && settingsOpen))"
+    :settings="runtime.appSettings"
+    :logo-data-url="runtime.schoolLogoDataUrl"
+    :teacher-url="runtime.teacherUrl"
+    :first-run="needsInitialSetup"
+    :standalone="needsInitialSetup || (!schoolAuth?.loggedIn && settingsOpen)"
+    @close="settingsOpen = false"
+  />
+  <SchoolLogin v-else-if="!schoolAuth?.loggedIn" @open-settings="settingsOpen = true" />
   <main
     v-else
     class="teacher-window flex h-screen overflow-hidden bg-background text-foreground"
@@ -446,7 +471,7 @@ onUnmounted(() => {
                   <strong>{{ record.studentName }}</strong
                   ><span>{{ record.studentId }}</span>
                 </div>
-                <span class="record-terminal">{{ record.stationId }}</span>
+                <span class="record-terminal">电脑 {{ record.stationId }}</span>
                 <span class="record-time"
                   ><Clock3 :size="13" />{{
                     new Date(record.signedAt).toLocaleTimeString('zh-CN')
@@ -497,7 +522,7 @@ onUnmounted(() => {
                   variant="destructive"
                   class="ml-auto"
                   :disabled="busy"
-                  @click="teacherStore.stopSession"
+                  @click="endCurrentSession"
                   >{{ busy ? '正在结束…' : '结束本场签到' }}</Button
                 >
               </div>
@@ -539,6 +564,24 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="activeSection === 'records'" class="mx-auto max-w-280">
+          <div class="mb-5 flex gap-2" role="tablist" aria-label="签到记录范围">
+            <Button
+              :variant="recordsTab === 'current' ? 'secondary' : 'ghost'"
+              role="tab"
+              :aria-selected="recordsTab === 'current'"
+              @click="recordsTab = 'current'"
+              >当前场次</Button
+            >
+            <Button
+              :variant="recordsTab === 'history' ? 'secondary' : 'ghost'"
+              role="tab"
+              :aria-selected="recordsTab === 'history'"
+              @click="recordsTab = 'history'"
+              >历史场次</Button
+            >
+          </div>
+          <AttendanceHistory v-if="recordsTab === 'history'" />
+          <template v-else>
           <div class="mb-6 flex items-end justify-between gap-5">
             <div>
               <div
@@ -574,7 +617,7 @@ onUnmounted(() => {
                     <th>学生</th>
                     <th>状态</th>
                     <th>签到时间</th>
-                    <th>终端编号</th>
+                    <th>电脑名称</th>
                     <th>身份证后四位</th>
                     <th class="w-28">操作</th>
                   </tr>
@@ -622,6 +665,7 @@ onUnmounted(() => {
               {{ snapshot?.session ? '本场次没有名单数据' : '开启场次后显示班级名单与签到状态' }}
             </div>
           </Card>
+          </template>
         </div>
 
         <div v-else-if="activeSection === 'terminal'" class="mx-auto max-w-280">
@@ -655,12 +699,8 @@ onUnmounted(() => {
                 <dd>{{ runtime?.teacherUrl }}</dd>
               </div>
               <div>
-                <dt>机器编号</dt>
+                <dt>教师机电脑名称</dt>
                 <dd>{{ runtime?.stationId }}</dd>
-              </div>
-              <div>
-                <dt>配置文件</dt>
-                <dd class="break-all">{{ runtime?.configPath }}</dd>
               </div>
             </dl>
           </Card>
@@ -702,7 +742,13 @@ onUnmounted(() => {
             </div>
             <h1 class="m-0 text-2xl font-bold tracking-tight">设置</h1>
           </div>
-          <Card class="content-panel appearance-card">
+          <DeploymentSettings
+            v-if="runtime?.appSettings"
+            :settings="runtime.appSettings"
+            :logo-data-url="runtime.schoolLogoDataUrl"
+            :teacher-url="runtime.teacherUrl"
+          />
+          <Card class="content-panel appearance-card mt-5">
             <div class="mb-5">
               <h2 class="panel-title">主题外观</h2>
               <p class="panel-subtitle">选择适合当前环境的显示主题，设置会自动保存。</p>

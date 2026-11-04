@@ -39,6 +39,7 @@ electron-builder.env
 /build/icon.icns
 /resources/icon.png
 /resources/school-logo.*
+!/resources/school-logo.png
 
 # Local IDE state
 .idea/

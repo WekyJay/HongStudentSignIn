@@ -10,6 +10,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test:archive": "node --experimental-strip-types --test tests/attendance-archive.test.mjs",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "preview:student": "node tools/preview-student.mjs",
@@ -30,6 +31,7 @@
     "@lucide/vue": "^1.64.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
     "pinia": "^4.1.0",
     "tailwind-merge": "^3.7.0",
     "vue-router": "^5.4.0"

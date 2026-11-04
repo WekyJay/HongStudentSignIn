@@ -58,13 +58,15 @@ export const useTeacherStore = defineStore('teacher', () => {
     }
   }
 
-  async function stopSession(): Promise<void> {
+  async function stopSession(): Promise<boolean> {
     busy.value = true
     error.value = ''
     try {
       snapshot.value = await window.signIn.stopSession()
+      return true
     } catch (cause) {
       error.value = (cause as Error).message
+      return false
     } finally {
       busy.value = false
     }

@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  ArchivedEntryUpdate,
+  ArchivedSessionDetail,
+  AttendanceArchivePage,
+  AttendanceArchiveQuery,
   CheckinResult,
+  AppSettings,
   PublicSession,
   RuntimeInfo,
   SchoolAuthState,
@@ -12,6 +17,10 @@ import type {
 
 const api = {
   getRuntimeInfo: (): Promise<RuntimeInfo> => ipcRenderer.invoke('runtime:info'),
+  saveAppSettings: (settings: AppSettings): Promise<void> =>
+    ipcRenderer.invoke('settings:save', settings),
+  selectSchoolLogo: (): Promise<{ path: string; preview: string } | null> =>
+    ipcRenderer.invoke('settings:select-logo'),
   getSchoolStatus: (): Promise<SchoolAuthState> => ipcRenderer.invoke('school:status'),
   schoolLogout: (): Promise<SchoolAuthState> => ipcRenderer.invoke('school:logout'),
   getSchoolProfile: (force = false): Promise<SchoolProfile> =>
@@ -30,6 +39,20 @@ const api = {
     ipcRenderer.invoke('teacher:mark-leave', studentId),
   clearLeave: (studentId: string): Promise<TeacherSnapshot> =>
     ipcRenderer.invoke('teacher:clear-leave', studentId),
+  listArchivedSessions: (query: AttendanceArchiveQuery): Promise<AttendanceArchivePage> =>
+    ipcRenderer.invoke('archive:list', query),
+  getArchivedSession: (sessionId: string): Promise<ArchivedSessionDetail> =>
+    ipcRenderer.invoke('archive:get', sessionId),
+  updateArchivedSession: (sessionId: string, className: string): Promise<ArchivedSessionDetail> =>
+    ipcRenderer.invoke('archive:update-session', sessionId, className),
+  updateArchivedEntry: (sessionId: string, studentId: string, update: ArchivedEntryUpdate): Promise<ArchivedSessionDetail> =>
+    ipcRenderer.invoke('archive:update-entry', sessionId, studentId, update),
+  deleteArchivedEntry: (sessionId: string, studentId: string): Promise<ArchivedSessionDetail> =>
+    ipcRenderer.invoke('archive:delete-entry', sessionId, studentId),
+  deleteArchivedSession: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('archive:delete-session', sessionId),
+  exportArchivedSession: (sessionId: string): Promise<string | null> =>
+    ipcRenderer.invoke('archive:export', sessionId),
   getStudentSession: (): Promise<PublicSession | null> => ipcRenderer.invoke('student:session'),
   checkin: (sessionId: string, idCard: string): Promise<CheckinResult> =>
     ipcRenderer.invoke('student:checkin', sessionId, idCard),

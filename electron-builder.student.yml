@@ -9,6 +9,8 @@ extraMetadata:
 win:
   executableName: StudentSignInStudent
 nsis:
+  oneClick: true
+  runAfterFinish: true
   artifactName: hong-student-sign-in-student-${version}-setup.${ext}
   shortcutName: 学生签到学生端
   uninstallDisplayName: 学生签到学生端

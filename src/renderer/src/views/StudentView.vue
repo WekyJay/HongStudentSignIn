@@ -12,6 +12,7 @@ const { session, idCard, result, connectionError, busy, canSubmit } = storeToRef
 const idCardInput = useTemplateRef<HTMLInputElement>('idCardInput')
 
 const isSuccess = computed(() => result.value?.code === 'SUCCESS')
+const schoolName = computed(() => session.value?.schoolName || runtime.value?.schoolName || '学校名称')
 const isLeave = computed(() => result.value?.code === 'ON_LEAVE')
 const successDepartment = computed(
   () => result.value?.departmentName || session.value?.departmentName || ''
@@ -45,8 +46,8 @@ watch(
     </div>
 
     <div class="stage">
-      <img v-if="runtime?.schoolLogoDataUrl" class="brand-logo" :src="runtime.schoolLogoDataUrl" :alt="runtime.schoolName" draggable="false" />
-      <h1 class="brand-title">{{ runtime?.schoolName || '学校名称' }}</h1>
+      <img v-if="runtime?.schoolLogoDataUrl" class="brand-logo" :src="runtime.schoolLogoDataUrl" :alt="schoolName" draggable="false" />
+      <h1 class="brand-title">{{ schoolName }}</h1>
       <p class="brand-subtitle">学生身份核验终端</p>
 
       <div class="session-banner" :class="{ 'is-active': session?.active }">
@@ -63,7 +64,7 @@ watch(
         </template>
         <span class="banner-divider"></span>
         <span class="banner-item">
-          <span class="banner-label">终端编号</span>
+          <span class="banner-label">电脑名称</span>
           <strong class="tabular-nums">{{ runtime?.stationId }}</strong>
         </span>
       </div>
@@ -119,7 +120,7 @@ watch(
                   <dd>{{ signedAtLabel }}</dd>
                 </div>
                 <div v-if="result.stationId">
-                  <dt>终端</dt>
+                  <dt>电脑名称</dt>
                   <dd>{{ result.stationId }}</dd>
                 </div>
               </dl>
