@@ -1,6 +1,6 @@
 {
   "name": "hong-student-sign-in",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "机房签到系统基础框架",
   "main": "./out/main/index.js",
   "private": true,
