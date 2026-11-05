@@ -463,7 +463,8 @@ app.whenReady().then(async () => {
           schoolServerUrl: config.schoolServerUrl || '',
           wechatAppId: config.wechatAppId || '',
           wechatRedirectUri: config.wechatRedirectUri || '',
-          listenPort: config.listenPort
+          listenPort: config.listenPort,
+          closeAfterCheckin: config.closeAfterCheckin !== false
         },
         stationId: hostname(),
         teacherUrl: config.role === 'teacher' ? getTeacherLanUrl(config) : config.teacherUrl,
@@ -507,6 +508,8 @@ app.whenReady().then(async () => {
       const wechatAppId = trimmed(settings.wechatAppId)
       const wechatRedirectUri = trimmed(settings.wechatRedirectUri)
       const listenPort = settings.listenPort
+      const closeAfterCheckin = settings.closeAfterCheckin
+      if (typeof closeAfterCheckin !== 'boolean') throw new Error('签到成功后关闭页面设置无效')
       if (!schoolName || schoolName.length > 80)
         throw new Error('学校名称不能为空，且不能超过 80 个字符')
       if (!schoolServerUrl || !wechatAppId || !wechatRedirectUri) {
@@ -544,7 +547,8 @@ app.whenReady().then(async () => {
         schoolServerUrl,
         wechatAppId,
         wechatRedirectUri,
-        listenPort: listenPort as number
+        listenPort: listenPort as number,
+        closeAfterCheckin
       }
       const temporaryPath = `${configPath}.tmp`
       writeFileSync(temporaryPath, JSON.stringify(next, null, 2), 'utf8')
@@ -600,7 +604,8 @@ app.whenReady().then(async () => {
         classId: unknown,
         className: unknown,
         classSize: unknown,
-        departmentName: unknown
+        departmentName: unknown,
+        lateAt: unknown
       ) => {
         if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
         if (
@@ -626,11 +631,14 @@ app.whenReady().then(async () => {
         ) {
           throw new Error('班级部门参数无效')
         }
+        if (lateAt != null && (typeof lateAt !== 'string' || Number.isNaN(Date.parse(lateAt))))
+          throw new Error('迟到时间无效')
         return requireService().startSession(
           classId,
           className,
           typeof classSize === 'number' ? classSize : undefined,
-          typeof departmentName === 'string' ? departmentName : undefined
+          typeof departmentName === 'string' ? departmentName : undefined,
+          typeof lateAt === 'string' ? lateAt : undefined
         )
       }
     )
@@ -638,6 +646,28 @@ app.whenReady().then(async () => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       return requireService().stopSession()
     })
+    ipcMain.handle('teacher:sync-roster', async (event) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      return requireService().syncRoster()
+    })
+    ipcMain.handle(
+      'teacher:set-mark',
+      async (event, studentId: unknown, mark: unknown, remark: unknown) => {
+        if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+        if (
+          typeof studentId !== 'string' ||
+          studentId.length > 100 ||
+          (mark != null && !['leave', 'withdrawn', 'other'].includes(String(mark))) ||
+          (remark != null && typeof remark !== 'string')
+        )
+          throw new Error('学生标记参数无效')
+        return requireService().setMark(
+          studentId,
+          mark as 'leave' | 'withdrawn' | 'other' | undefined,
+          remark as string | undefined
+        )
+      }
+    )
     ipcMain.handle('teacher:mark-leave', async (event, studentId: unknown) => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       if (typeof studentId !== 'string' || studentId.length > 100) throw new Error('学生参数无效')
@@ -690,7 +720,9 @@ app.whenReady().then(async () => {
         if (
           typeof value.attendance !== 'string' ||
           (value.signedAt != null && typeof value.signedAt !== 'string') ||
-          (value.stationId != null && typeof value.stationId !== 'string')
+          (value.stationId != null && typeof value.stationId !== 'string') ||
+          (value.mark != null && typeof value.mark !== 'string') ||
+          (value.remark != null && typeof value.remark !== 'string')
         )
           throw new Error('考勤修改内容无效')
         return requireArchive().updateEntry(archiveId(sessionId), archiveId(studentId), value)
@@ -707,6 +739,7 @@ app.whenReady().then(async () => {
     ipcMain.handle('archive:export', async (event, sessionId: unknown): Promise<string | null> => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       const detail = requireArchive().get(archiveId(sessionId))
+      // eslint-disable-next-line no-control-regex
       const safeName = detail.session.className.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 60)
       const options = {
         title: '导出签到记录',
@@ -732,11 +765,18 @@ app.whenReady().then(async () => {
         if (typeof sessionId !== 'string' || typeof idCard !== 'string' || idCard.length > 30) {
           throw new Error('签到参数无效')
         }
-        return fetchTeacher<CheckinResult>(config, '/api/v1/checkins', {
+        const result = await fetchTeacher<CheckinResult>(config, '/api/v1/checkins', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ sessionId, idCard, stationId: hostname() })
         })
+        if (result.code === 'SUCCESS' && config.closeAfterCheckin !== false) {
+          setTimeout(() => {
+            studentSessionActive = false
+            setStudentWindowActive(false)
+          }, 2500)
+        }
+        return result
       }
     )
     app.on('second-instance', () => {

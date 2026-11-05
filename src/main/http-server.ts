@@ -31,6 +31,8 @@ export async function startTeacherServer(
   config: AppConfig,
   service: TeacherService
 ): Promise<() => Promise<void>> {
+  // 学生端已经按场次状态自动收起窗口；按终端地址隔离成功记录即可沿用现有行为。
+  const signedTerminals = new Map<string, { sessionId: string; stationId: string }>()
   const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
       const path = new URL(request.url || '/', 'http://localhost').pathname
@@ -40,8 +42,18 @@ export async function startTeacherServer(
       }
       if (request.method === 'GET' && path === '/api/v1/session') {
         const session = service.publicSession()
+        const terminalAddress = request.socket.remoteAddress
+        const signedTerminal = terminalAddress ? signedTerminals.get(terminalAddress) : undefined
+        const checkedIn = Boolean(
+          signedTerminal &&
+          session?.id === signedTerminal.sessionId &&
+          service.hasCheckinAtStation(signedTerminal.sessionId, signedTerminal.stationId)
+        )
+        if (terminalAddress && signedTerminal && !checkedIn) signedTerminals.delete(terminalAddress)
+        const hideAfterCheckin = config.closeAfterCheckin !== false && session?.active && checkedIn
         json(response, 200, {
-          session: session ? { ...session, schoolName: config.schoolName } : null
+          session:
+            session && !hideAfterCheckin ? { ...session, schoolName: config.schoolName } : null
         })
         return
       }
@@ -65,6 +77,15 @@ export async function startTeacherServer(
           throw new Error('签到参数不正确')
         }
         const result: CheckinResult = await service.checkin(data as CheckinRequest)
+        if (result.code === 'SUCCESS' && config.closeAfterCheckin !== false) {
+          const terminalAddress = request.socket.remoteAddress
+          if (terminalAddress) {
+            signedTerminals.set(terminalAddress, {
+              sessionId: data.sessionId,
+              stationId: data.stationId
+            })
+          }
+        }
         const status =
           result.code === 'SUCCESS' ? 201 : result.code === 'DIRECTORY_UNAVAILABLE' ? 503 : 409
         json(response, status, result)

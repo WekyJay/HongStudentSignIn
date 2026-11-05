@@ -24,8 +24,11 @@ type SessionRow = Omit<ArchivedSession, 'total' | 'signed' | 'leave' | 'absent'>
 function validDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00`)
-  return !Number.isNaN(date.getTime()) &&
-    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` === value
+  return (
+    !Number.isNaN(date.getTime()) &&
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` ===
+      value
+  )
 }
 
 function validateQuery(query: AttendanceArchiveQuery): Required<AttendanceArchiveQuery> {
@@ -57,22 +60,59 @@ export class AttendanceArchive {
         department_name TEXT,
         started_at TEXT NOT NULL,
         ended_at TEXT NOT NULL,
-        roster_notice TEXT
+        roster_notice TEXT,
+        late_at TEXT
       );
       CREATE TABLE IF NOT EXISTS attendance_entries (
         session_id TEXT NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,
         student_id TEXT NOT NULL,
         student_name TEXT NOT NULL,
         gender INTEGER,
-        attendance TEXT NOT NULL CHECK(attendance IN ('signed', 'absent', 'leave')),
+        attendance TEXT NOT NULL,
         signed_at TEXT,
         station_id TEXT,
         id_card_last4 TEXT,
+        mark TEXT,
+        remark TEXT,
         PRIMARY KEY (session_id, student_id)
       );
       CREATE INDEX IF NOT EXISTS attendance_sessions_started ON attendance_sessions(started_at DESC);
       CREATE INDEX IF NOT EXISTS attendance_entries_student ON attendance_entries(student_name);
     `)
+    const columns = (table: string): string[] =>
+      (this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+        (row) => row.name
+      )
+    if (!columns('attendance_sessions').includes('late_at'))
+      this.db.exec('ALTER TABLE attendance_sessions ADD COLUMN late_at TEXT')
+    if (!columns('attendance_entries').includes('mark'))
+      this.db.exec('ALTER TABLE attendance_entries ADD COLUMN mark TEXT')
+    if (!columns('attendance_entries').includes('remark'))
+      this.db.exec('ALTER TABLE attendance_entries ADD COLUMN remark TEXT')
+    const entrySchema = (
+      this.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'attendance_entries'"
+        )
+        .get() as { sql: string }
+    ).sql
+    if (/CHECK\s*\(\s*attendance\s+IN/i.test(entrySchema)) {
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE attendance_entries RENAME TO attendance_entries_old;
+        CREATE TABLE attendance_entries (
+          session_id TEXT NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+          student_id TEXT NOT NULL, student_name TEXT NOT NULL, gender INTEGER,
+          attendance TEXT NOT NULL, signed_at TEXT, station_id TEXT,
+          id_card_last4 TEXT, mark TEXT, remark TEXT,
+          PRIMARY KEY (session_id, student_id)
+        );
+        INSERT INTO attendance_entries SELECT * FROM attendance_entries_old;
+        DROP TABLE attendance_entries_old;
+        CREATE INDEX attendance_entries_student ON attendance_entries(student_name);
+        COMMIT;
+      `)
+    }
   }
 
   close(): void {
@@ -88,21 +128,42 @@ export class AttendanceArchive {
     const endedAt = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         INSERT INTO attendance_sessions
-          (id, class_id, class_name, department_name, started_at, ended_at, roster_notice)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(session.id, session.classId, session.className, session.departmentName ?? null,
-        session.startedAt, endedAt, rosterNotice)
+          (id, class_id, class_name, department_name, started_at, ended_at, roster_notice, late_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `
+        )
+        .run(
+          session.id,
+          session.classId,
+          session.className,
+          session.departmentName ?? null,
+          session.startedAt,
+          endedAt,
+          rosterNotice,
+          session.lateAt ?? null
+        )
       const insertEntry = this.db.prepare(`
         INSERT INTO attendance_entries
-          (session_id, student_id, student_name, gender, attendance, signed_at, station_id, id_card_last4)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (session_id, student_id, student_name, gender, attendance, signed_at, station_id, id_card_last4, mark, remark)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       for (const entry of roster) {
-        insertEntry.run(session.id, entry.studentId, entry.studentName, entry.gender ?? null,
-          entry.attendance, entry.signedAt ?? null, entry.stationId ?? null,
-          entry.idCardLast4 ?? null)
+        insertEntry.run(
+          session.id,
+          entry.studentId,
+          entry.studentName,
+          entry.gender ?? null,
+          entry.attendance,
+          entry.signedAt ?? null,
+          entry.stationId ?? null,
+          entry.idCardLast4 ?? null,
+          entry.mark ?? null,
+          entry.remark ?? null
+        )
       }
       this.db.exec('COMMIT')
     } catch (error) {
@@ -134,14 +195,18 @@ export class AttendanceArchive {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
     // ESCAPE keeps %, _ and backslash in a typed keyword literal.
     const filteredWhere = where.replaceAll('LIKE ?', "LIKE ? ESCAPE '\\'")
-    const count = this.db.prepare(`SELECT COUNT(*) AS total FROM attendance_sessions s ${filteredWhere}`)
+    const count = this.db
+      .prepare(`SELECT COUNT(*) AS total FROM attendance_sessions s ${filteredWhere}`)
       .get(...args) as { total: number }
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT s.id, s.class_id AS classId, s.class_name AS className,
         s.department_name AS departmentName, s.started_at AS startedAt,
-        s.ended_at AS endedAt, s.roster_notice AS rosterNotice,
+        s.ended_at AS endedAt, s.roster_notice AS rosterNotice, s.late_at AS lateAt,
         COUNT(e.student_id) AS total,
-        COALESCE(SUM(e.attendance = 'signed'), 0) AS signed,
+        COALESCE(SUM(e.attendance IN ('signed', 'late')), 0) AS signed,
+        COALESCE(SUM(e.attendance = 'late'), 0) AS late,
         COALESCE(SUM(e.attendance = 'leave'), 0) AS leave,
         COALESCE(SUM(e.attendance = 'absent'), 0) AS absent
       FROM attendance_sessions s
@@ -150,65 +215,98 @@ export class AttendanceArchive {
       GROUP BY s.id
       ORDER BY s.started_at DESC, s.id DESC
       LIMIT ? OFFSET ?
-    `).all(...args, PAGE_SIZE, (page - 1) * PAGE_SIZE) as SessionRow[]
+    `
+      )
+      .all(...args, PAGE_SIZE, (page - 1) * PAGE_SIZE) as SessionRow[]
     return { items: rows.map((row) => ({ ...row })), total: count.total, page, pageSize: PAGE_SIZE }
   }
 
   get(id: string): ArchivedSessionDetail {
-    const session = this.db.prepare(`
+    const session = this.db
+      .prepare(
+        `
       SELECT s.id, s.class_id AS classId, s.class_name AS className,
         s.department_name AS departmentName, s.started_at AS startedAt,
-        s.ended_at AS endedAt, s.roster_notice AS rosterNotice,
+        s.ended_at AS endedAt, s.roster_notice AS rosterNotice, s.late_at AS lateAt,
         COUNT(e.student_id) AS total,
-        COALESCE(SUM(e.attendance = 'signed'), 0) AS signed,
+        COALESCE(SUM(e.attendance IN ('signed', 'late')), 0) AS signed,
+        COALESCE(SUM(e.attendance = 'late'), 0) AS late,
         COALESCE(SUM(e.attendance = 'leave'), 0) AS leave,
         COALESCE(SUM(e.attendance = 'absent'), 0) AS absent
       FROM attendance_sessions s
       LEFT JOIN attendance_entries e ON e.session_id = s.id
       WHERE s.id = ? GROUP BY s.id
-    `).get(id) as SessionRow | undefined
+    `
+      )
+      .get(id) as SessionRow | undefined
     if (!session) throw new Error('该历史场次不存在或已删除')
-    const entries = this.db.prepare(`
+    const entries = this.db
+      .prepare(
+        `
       SELECT session_id AS sessionId, student_id AS studentId,
         student_name AS studentName, gender, attendance,
         signed_at AS signedAt, station_id AS stationId,
-        id_card_last4 AS idCardLast4
+        id_card_last4 AS idCardLast4, mark, remark
       FROM attendance_entries WHERE session_id = ? ORDER BY student_id
-    `).all(id) as unknown as ArchivedEntry[]
+    `
+      )
+      .all(id) as unknown as ArchivedEntry[]
     return { session: { ...session }, entries: entries.map((entry) => ({ ...entry })) }
   }
 
   updateSession(id: string, className: string): ArchivedSessionDetail {
     const name = className.trim()
     if (!name || name.length > 100) throw new Error('班级名称须为 1 到 100 个字符')
-    const result = this.db.prepare('UPDATE attendance_sessions SET class_name = ? WHERE id = ?')
+    const result = this.db
+      .prepare('UPDATE attendance_sessions SET class_name = ? WHERE id = ?')
       .run(name, id)
     if (!result.changes) throw new Error('该历史场次不存在或已删除')
     return this.get(id)
   }
 
-  updateEntry(sessionId: string, studentId: string, update: ArchivedEntryUpdate): ArchivedSessionDetail {
-    if (!['signed', 'absent', 'leave'].includes(update.attendance)) throw new Error('考勤状态无效')
+  updateEntry(
+    sessionId: string,
+    studentId: string,
+    update: ArchivedEntryUpdate
+  ): ArchivedSessionDetail {
+    if (!['signed', 'late', 'absent', 'leave'].includes(update.attendance))
+      throw new Error('考勤状态无效')
+    if (update.mark && !['leave', 'withdrawn', 'other'].includes(update.mark))
+      throw new Error('学生标记无效')
+    if (update.remark && update.remark.trim().length > 100) throw new Error('备注不能超过 100 字')
+    if (update.mark === 'other' && !update.remark?.trim()) throw new Error('请填写其它情况')
     let signedAt: string | null = null
     let stationId: string | null = null
-    if (update.attendance === 'signed') {
+    if (update.attendance === 'signed' || update.attendance === 'late') {
       signedAt = update.signedAt?.trim() || null
       stationId = update.stationId?.trim() || null
       if (!signedAt || Number.isNaN(Date.parse(signedAt))) throw new Error('请填写有效的签到时间')
       if (!stationId || stationId.length > 100) throw new Error('电脑名称须为 1 到 100 个字符')
     }
-    const result = this.db.prepare(`
-      UPDATE attendance_entries SET attendance = ?, signed_at = ?, station_id = ?
+    const result = this.db
+      .prepare(
+        `
+      UPDATE attendance_entries SET attendance = ?, signed_at = ?, station_id = ?, mark = ?, remark = ?
       WHERE session_id = ? AND student_id = ?
-    `).run(update.attendance, signedAt, stationId, sessionId, studentId)
+    `
+      )
+      .run(
+        update.attendance,
+        signedAt,
+        stationId,
+        update.mark ?? null,
+        update.remark?.trim() || null,
+        sessionId,
+        studentId
+      )
     if (!result.changes) throw new Error('该学生记录不存在或已删除')
     return this.get(sessionId)
   }
 
   deleteEntry(sessionId: string, studentId: string): ArchivedSessionDetail {
-    const result = this.db.prepare(
-      'DELETE FROM attendance_entries WHERE session_id = ? AND student_id = ?'
-    ).run(sessionId, studentId)
+    const result = this.db
+      .prepare('DELETE FROM attendance_entries WHERE session_id = ? AND student_id = ?')
+      .run(sessionId, studentId)
     if (!result.changes) throw new Error('该学生记录不存在或已删除')
     return this.get(sessionId)
   }

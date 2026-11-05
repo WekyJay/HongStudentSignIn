@@ -8,6 +8,8 @@ import {
   Check,
   ClipboardList,
   Clock3,
+  Eye,
+  RefreshCw,
   Computer,
   GraduationCap,
   LayoutDashboard,
@@ -36,6 +38,8 @@ import SchoolLogin from '../components/SchoolLogin.vue'
 import DeploymentSettings from '../components/DeploymentSettings.vue'
 import AttendanceHistory from '../components/AttendanceHistory.vue'
 import ClassPicker from '../components/ClassPicker.vue'
+import Dialog from '../components/ui/dialog/Dialog.vue'
+import type { RosterEntry, StudentMark } from '../../../shared/contracts'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSchoolStore } from '../stores/school'
 import { useTeacherStore } from '../stores/teacher'
@@ -65,6 +69,13 @@ const recordsTab = ref<'current' | 'history'>('current')
 const settingsOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const maximized = ref(false)
+const lateTime = ref('')
+const idCardEntry = ref<RosterEntry | null>(null)
+const markEntry = ref<RosterEntry | null>(null)
+const markDraft = ref<'' | StudentMark>('')
+const remarkDraft = ref('')
+const markDialogOpen = ref(false)
+const idDialogOpen = ref(false)
 let removeWindowListener: (() => void) | undefined
 
 const menuItems: {
@@ -103,9 +114,12 @@ const selectedClass = computed(
 )
 const rosterStats = computed(() => {
   const roster = snapshot.value?.roster ?? []
-  const signed = roster.filter((entry) => entry.attendance === 'signed').length
+  const signed = roster.filter(
+    (entry) => entry.attendance === 'signed' || entry.attendance === 'late'
+  ).length
+  const late = roster.filter((entry) => entry.attendance === 'late').length
   const leave = roster.filter((entry) => entry.attendance === 'leave').length
-  return { total: roster.length, signed, leave, absent: roster.length - signed - leave }
+  return { total: roster.length, signed, late, leave, absent: roster.length - signed - leave }
 })
 const todayLabel = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
@@ -139,7 +153,50 @@ function closeWindow(): void {
 function startSelectedSession(): void {
   const target = selectedClass.value
   if (!target) return
-  void teacherStore.startSession(target.id, target.className, target.size, target.departmentName)
+  const today = new Date()
+  const [hour, minute] = lateTime.value.split(':').map(Number)
+  const lateAt = lateTime.value
+    ? new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate(),
+        hour,
+        minute,
+        0
+      ).toISOString()
+    : undefined
+  void teacherStore.startSession(
+    target.id,
+    target.className,
+    target.size,
+    target.departmentName,
+    lateAt
+  )
+}
+
+function openMark(entry: RosterEntry): void {
+  error.value = ''
+  markEntry.value = entry
+  markDraft.value = entry.mark ?? ''
+  remarkDraft.value = entry.remark ?? ''
+  markDialogOpen.value = true
+}
+
+async function saveMark(): Promise<void> {
+  if (!markEntry.value) return
+  if (
+    await teacherStore.setMark(
+      markEntry.value.studentId,
+      markDraft.value || undefined,
+      remarkDraft.value
+    )
+  )
+    markDialogOpen.value = false
+}
+
+function showIdCard(entry: RosterEntry): void {
+  idCardEntry.value = entry
+  idDialogOpen.value = true
 }
 
 async function endCurrentSession(): Promise<void> {
@@ -147,11 +204,6 @@ async function endCurrentSession(): Promise<void> {
     recordsTab.value = 'history'
     activeSection.value = 'records'
   }
-}
-
-function toggleLeave(entry: { studentId: string; attendance: string }): void {
-  if (entry.attendance === 'leave') void teacherStore.clearLeave(entry.studentId)
-  else void teacherStore.markLeave(entry.studentId)
 }
 
 function resetEntryCheckin(entry: { studentId: string; studentName: string }): void {
@@ -201,6 +253,40 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <Dialog
+    v-model:open="idDialogOpen"
+    :title="`${idCardEntry?.studentName ?? ''}的身份证号码`"
+    description="仅供现场核对，请勿向无关人员展示。"
+  >
+    <p class="full-id-card tabular-nums">{{ idCardEntry?.idCard || '暂无身份证号码' }}</p>
+  </Dialog>
+  <Dialog
+    v-model:open="markDialogOpen"
+    :title="`标记 ${markEntry?.studentName ?? ''}`"
+    description="标记和备注会保存到本场历史记录。"
+  >
+    <form class="mark-form" @submit.prevent="saveMark">
+      <p v-if="error" class="roster-notice" role="alert">{{ error }}</p>
+      <label
+        >学生标记<select v-model="markDraft">
+          <option value="">无标记</option>
+          <option value="leave">请假</option>
+          <option value="withdrawn">退学</option>
+          <option value="other">其它情况</option>
+        </select></label
+      >
+      <label v-if="markDraft === 'other'"
+        >其它情况<input v-model="remarkDraft" required maxlength="100" placeholder="输入具体情况"
+      /></label>
+      <label v-else-if="markDraft"
+        >备注（可选）<input v-model="remarkDraft" maxlength="100" placeholder="补充说明"
+      /></label>
+      <div class="mark-actions">
+        <Button type="button" variant="ghost" @click="markDialogOpen = false">取消</Button
+        ><Button type="submit" :disabled="busy">保存标记</Button>
+      </div>
+    </form>
+  </Dialog>
   <DeploymentSettings
     v-if="runtime && (needsInitialSetup || (!schoolAuth?.loggedIn && settingsOpen))"
     :settings="runtime.appSettings"
@@ -541,6 +627,15 @@ onUnmounted(() => {
                   ><span
                     >开始于 {{ new Date(snapshot.session.startedAt).toLocaleString('zh-CN') }}</span
                   >
+                  <span v-if="snapshot.session.lateAt"
+                    >迟到时间
+                    {{
+                      new Date(snapshot.session.lateAt).toLocaleTimeString('zh-CN', {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })
+                    }}</span
+                  >
                 </div>
                 <Button
                   variant="destructive"
@@ -554,6 +649,9 @@ onUnmounted(() => {
                 <TriangleAlert :size="15" />
                 <span>{{ snapshot.rosterNotice }}</span>
               </p>
+              <Button variant="outline" size="sm" :disabled="busy" @click="teacherStore.syncRoster"
+                ><RefreshCw :size="14" />手动同步班级名单</Button
+              >
             </template>
             <form v-else class="session-form" @submit.prevent="startSelectedSession">
               <div class="session-field">
@@ -565,6 +663,16 @@ onUnmounted(() => {
                   :disabled="!!runtime?.serverError"
                   aria-label="签到班级"
                 />
+              </div>
+              <div class="session-field">
+                <label class="field-label" for="late-time">迟到时间（可选）</label
+                ><input
+                  id="late-time"
+                  v-model="lateTime"
+                  type="time"
+                  step="60"
+                  class="late-time-input"
+                /><span class="form-note">超过所设时间的下一秒自动标记迟到</span>
               </div>
               <p v-if="loadingClasses" class="form-note">正在从学校服务加载班级列表…</p>
               <p v-else-if="schoolError" class="form-note text-red-700">
@@ -625,9 +733,19 @@ onUnmounted(() => {
               <div v-if="snapshot?.roster" class="flex flex-wrap items-center justify-end gap-2">
                 <Badge variant="outline">应到 {{ rosterStats.total }} 人</Badge>
                 <Badge variant="secondary">实到 {{ rosterStats.signed }} 人</Badge>
+                <Badge v-if="rosterStats.late" variant="outline"
+                  >迟到 {{ rosterStats.late }} 人</Badge
+                >
                 <Badge variant="outline" class="leave-badge">请假 {{ rosterStats.leave }} 人</Badge>
                 <Badge variant="outline" class="absent-badge"
                   >未到 {{ rosterStats.absent }} 人</Badge
+                >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="busy || !snapshot?.session?.active"
+                  @click="teacherStore.syncRoster"
+                  ><RefreshCw :size="14" />同步名单</Button
                 >
                 <Button
                   variant="outline"
@@ -648,16 +766,19 @@ onUnmounted(() => {
                 <table class="w-full border-collapse text-left text-sm">
                   <thead>
                     <tr>
+                      <th>序号</th>
                       <th>学生</th>
                       <th>状态</th>
                       <th>签到时间</th>
                       <th>电脑名称</th>
-                      <th>身份证后四位</th>
+                      <th>身份证</th>
+                      <th>标记</th>
                       <th class="w-28">操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="entry in snapshot.roster" :key="entry.studentId">
+                    <tr v-for="(entry, index) in snapshot.roster" :key="entry.studentId">
+                      <td class="tabular-nums">{{ index + 1 }}</td>
                       <td>
                         <div class="flex items-center gap-3">
                           <span class="record-avatar">{{ entry.studentName.slice(0, 1) }}</span
@@ -667,6 +788,9 @@ onUnmounted(() => {
                       <td>
                         <Badge v-if="entry.attendance === 'signed'" variant="secondary"
                           ><Check :size="12" />已签到</Badge
+                        >
+                        <Badge v-else-if="entry.attendance === 'late'" variant="outline"
+                          >迟到</Badge
                         >
                         <Badge
                           v-else-if="entry.attendance === 'leave'"
@@ -682,10 +806,30 @@ onUnmounted(() => {
                         }}
                       </td>
                       <td>{{ entry.stationId ?? '—' }}</td>
-                      <td class="tabular-nums">****{{ entry.idCardLast4 }}</td>
+                      <td>
+                        <button
+                          type="button"
+                          class="id-card-reveal tabular-nums"
+                          :aria-label="`查看${entry.studentName}的完整身份证号码`"
+                          @click="showIdCard(entry)"
+                        >
+                          ****{{ entry.idCardLast4 }} <Eye :size="14" />
+                        </button>
+                      </td>
+                      <td>
+                        {{
+                          entry.mark === 'withdrawn'
+                            ? '退学'
+                            : entry.mark === 'other'
+                              ? entry.remark
+                              : entry.mark === 'leave'
+                                ? '请假'
+                                : '—'
+                        }}
+                      </td>
                       <td>
                         <Button
-                          v-if="entry.attendance === 'signed'"
+                          v-if="entry.attendance === 'signed' || entry.attendance === 'late'"
                           variant="ghost"
                           size="sm"
                           class="reset-checkin"
@@ -693,13 +837,8 @@ onUnmounted(() => {
                           @click="resetEntryCheckin(entry)"
                           >重新签到</Button
                         >
-                        <Button
-                          v-else
-                          variant="ghost"
-                          size="sm"
-                          class="leave-toggle"
-                          @click="toggleLeave(entry)"
-                          >{{ entry.attendance === 'leave' ? '取消请假' : '标记请假' }}</Button
+                        <Button variant="ghost" size="sm" :disabled="busy" @click="openMark(entry)"
+                          >标记</Button
                         >
                       </td>
                     </tr>
@@ -1651,5 +1790,56 @@ table td strong {
   border-color: rgba(217, 145, 43, 0.45);
   background: rgba(217, 145, 43, 0.14);
   color: #f4ce78;
+}
+.late-time-input,
+.mark-form input,
+.mark-form select {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.mark-form {
+  display: grid;
+  gap: 16px;
+}
+.mark-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.mark-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.full-id-card {
+  margin: 0;
+  padding: 16px;
+  border-radius: 9px;
+  background: hsl(var(--secondary));
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.id-card-reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--primary));
+  cursor: pointer;
+}
+.id-card-reveal:focus-visible {
+  outline: 2px solid hsl(var(--ring));
 }
 </style>

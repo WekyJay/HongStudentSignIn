@@ -13,6 +13,8 @@ export interface AppConfig {
   schoolServerUrl?: string
   wechatAppId?: string
   wechatRedirectUri?: string
+  /** 单个终端签到成功后是否收起签到窗口，旧配置默认开启 */
+  closeAfterCheckin?: boolean
   tls?: { certPath: string; keyPath: string }
 }
 
@@ -37,6 +39,7 @@ export interface AppSettings {
   wechatAppId: string
   wechatRedirectUri: string
   listenPort: number
+  closeAfterCheckin: boolean
 }
 
 export interface SchoolAuthState {
@@ -81,7 +84,8 @@ export interface ClassRoster {
   duplicates: number
 }
 
-export type AttendanceStatus = 'signed' | 'absent' | 'leave'
+export type AttendanceStatus = 'signed' | 'late' | 'absent' | 'leave'
+export type StudentMark = 'leave' | 'withdrawn' | 'other'
 
 export interface RosterEntry {
   studentId: string
@@ -91,6 +95,10 @@ export interface RosterEntry {
   signedAt?: string
   stationId?: string
   idCardLast4?: string
+  /** 仅教师端当前名单可见，不经学生端接口发送 */
+  idCard?: string
+  mark?: StudentMark
+  remark?: string
 }
 
 export interface PublicSession {
@@ -102,6 +110,7 @@ export interface PublicSession {
   departmentName?: string
   startedAt: string
   active: boolean
+  lateAt?: string
 }
 
 export interface CheckinRecord {
@@ -136,10 +145,12 @@ export interface ArchivedSession {
   departmentName?: string
   startedAt: string
   endedAt: string
+  lateAt?: string
   total: number
   signed: number
   leave: number
   absent: number
+  late: number
   rosterNotice: string | null
 }
 
@@ -163,6 +174,8 @@ export interface ArchivedEntryUpdate {
   attendance: AttendanceStatus
   signedAt?: string
   stationId?: string
+  mark?: StudentMark
+  remark?: string
 }
 
 export interface CheckinRequest {

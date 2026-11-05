@@ -1,6 +1,6 @@
 # 教师端安装包：npm run build:win:teacher
 extends: ./electron-builder.yml
-appId: org.example.studentsignin.teacher
+appId: cn.wekyjay.studentsignin
 productName: 学生签到教师端
 directories:
   output: dist/teacher

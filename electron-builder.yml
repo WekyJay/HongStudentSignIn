@@ -1,4 +1,4 @@
-appId: org.example.studentsignin
+appId: cn.wekyjay.studentsignin
 productName: 学生签到
 directories:
   buildResources: build

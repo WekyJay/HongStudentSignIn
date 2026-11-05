@@ -11,15 +11,18 @@ import type {
   SessionStudent,
   TeacherSnapshot
 } from '../shared/contracts'
+import type { StudentMark } from '../shared/contracts'
 import type { StudentDirectory } from './directory'
 import { AttendanceArchive } from './attendance-archive'
 import { isValidMainlandIdCard } from './identity'
+import { isLate } from './attendance-time'
 
 interface PersistedState {
   session: PublicSession | null
   checkins: CheckinRecord[]
   roster: SessionStudent[] | null
   leave: string[]
+  marks?: Record<string, { mark: StudentMark; remark?: string }>
   rosterNotice: string | null
   archivedSessionId?: string
 }
@@ -51,6 +54,7 @@ export class TeacherService {
     checkins: [],
     roster: null,
     leave: [],
+    marks: {},
     rosterNotice: null
   }
   private pending = Promise.resolve()
@@ -69,6 +73,9 @@ export class TeacherService {
         checkins: persisted.checkins ?? [],
         roster: persisted.roster ?? null,
         leave: persisted.leave ?? [],
+        marks:
+          persisted.marks ??
+          Object.fromEntries((persisted.leave ?? []).map((id) => [id, { mark: 'leave' }])),
         rosterNotice: persisted.rosterNotice ?? null,
         archivedSessionId: persisted.archivedSessionId
       }
@@ -97,15 +104,20 @@ export class TeacherService {
     const roster = this.state.roster
       ? this.state.roster.map((student): RosterEntry => {
           const record = checkins.find((item) => item.studentId === student.studentId)
-          const onLeave = this.state.leave.includes(student.studentId)
+          const mark = this.state.marks?.[student.studentId]
+          const onLeave = mark?.mark === 'leave' || this.state.leave.includes(student.studentId)
+          const late = Boolean(record && isLate(record.signedAt, this.state.session?.lateAt))
           return {
             studentId: student.studentId,
             studentName: student.studentName,
             gender: student.gender,
-            attendance: record ? 'signed' : onLeave ? 'leave' : 'absent',
+            attendance: record ? (late ? 'late' : 'signed') : onLeave ? 'leave' : 'absent',
             signedAt: record?.signedAt,
             stationId: record?.stationId,
-            idCardLast4: record?.idCardLast4 ?? student.idCard.slice(-4)
+            idCardLast4: record?.idCardLast4 ?? student.idCard.slice(-4),
+            idCard: student.idCard,
+            mark: mark?.mark,
+            remark: mark?.remark
           }
         })
       : null
@@ -122,6 +134,12 @@ export class TeacherService {
     return this.state.session
   }
 
+  hasCheckinAtStation(sessionId: string, stationId: string): boolean {
+    return this.state.checkins.some(
+      (record) => record.sessionId === sessionId && record.stationId === stationId
+    )
+  }
+
   async listClasses(): Promise<SchoolClass[]> {
     if (!this.directory.ready) throw new Error('请先登录学校服务')
     return this.directory.listClasses()
@@ -131,7 +149,8 @@ export class TeacherService {
     classId: string,
     className: string,
     expectedSize?: number,
-    departmentName?: string
+    departmentName?: string,
+    lateAt?: string
   ): Promise<TeacherSnapshot> {
     if (!classId.trim() || !className.trim()) throw new Error('请选择要签到的班级')
     if (this.state.session?.active) throw new Error('请先结束当前场次')
@@ -146,11 +165,13 @@ export class TeacherService {
         className: className.trim(),
         departmentName: departmentName?.trim() || undefined,
         startedAt: new Date().toISOString(),
-        active: true
+        active: true,
+        lateAt
       },
       checkins: [],
       roster: students,
       leave: [],
+      marks: {},
       rosterNotice: rosterNotice(students.length, expectedSize, skipped, duplicates),
       archivedSessionId: undefined
     }
@@ -172,6 +193,7 @@ export class TeacherService {
       checkins: [],
       roster: null,
       leave: [],
+      marks: {},
       rosterNotice: null,
       archivedSessionId: this.state.session?.id
     }
@@ -191,6 +213,8 @@ export class TeacherService {
     }
     if (!this.state.leave.includes(studentId)) {
       this.state.leave.push(studentId)
+      this.state.marks ??= {}
+      this.state.marks[studentId] = { mark: 'leave' }
       await this.save()
     }
     return this.snapshot()
@@ -201,8 +225,50 @@ export class TeacherService {
     const next = this.state.leave.filter((id) => id !== studentId)
     if (next.length !== this.state.leave.length) {
       this.state.leave = next
+      if (this.state.marks?.[studentId]?.mark === 'leave') delete this.state.marks[studentId]
       await this.save()
     }
+    return this.snapshot()
+  }
+
+  async setMark(studentId: string, mark?: StudentMark, remark?: string): Promise<TeacherSnapshot> {
+    if (!this.state.session?.active) throw new Error('当前没有进行中的签到场次')
+    if (!this.state.roster?.some((student) => student.studentId === studentId))
+      throw new Error('学生不在当前名单中')
+    if (remark && remark.trim().length > 100) throw new Error('备注不能超过 100 字')
+    if (mark === 'other' && !remark?.trim()) throw new Error('请填写其它情况')
+    if (mark === 'leave' && this.state.checkins.some((record) => record.studentId === studentId))
+      throw new Error('已签到的学生不能标记请假')
+    this.state.marks ??= {}
+    if (mark) this.state.marks[studentId] = { mark, remark: remark?.trim() || undefined }
+    else delete this.state.marks[studentId]
+    this.state.leave = this.state.leave.filter((id) => id !== studentId)
+    if (mark === 'leave') this.state.leave.push(studentId)
+    await this.save()
+    return this.snapshot()
+  }
+
+  async syncRoster(): Promise<TeacherSnapshot> {
+    const session = this.state.session
+    if (!session?.active) throw new Error('当前没有进行中的签到场次')
+    if (!this.directory.ready) throw new Error('学校服务尚未连接')
+    const { students, skipped, duplicates } = await this.directory.fetchClassRoster(session.classId)
+    if (this.state.session?.id !== session.id) throw new Error('签到场次已变化')
+    const existing = new Map(
+      (this.state.roster ?? []).map((student) => [student.studentId, student])
+    )
+    // 保留已签到或已标记的旧名单成员，避免同步后丢失本场记录。
+    const next = new Map(students.map((student) => [student.studentId, student]))
+    for (const [id, student] of existing) {
+      if (
+        !next.has(id) &&
+        (this.state.checkins.some((record) => record.studentId === id) || this.state.marks?.[id])
+      )
+        next.set(id, student)
+    }
+    this.state.roster = [...next.values()]
+    this.state.rosterNotice = rosterNotice(students.length, undefined, skipped, duplicates)
+    await this.save()
     return this.snapshot()
   }
 
@@ -270,7 +336,7 @@ export class TeacherService {
     await this.save()
     return {
       code: 'SUCCESS',
-      message: '签到成功',
+      message: isLate(record.signedAt, session.lateAt) ? '签到成功，已标记迟到' : '签到成功',
       studentName: student.studentName,
       className: session.className,
       departmentName: session.departmentName,

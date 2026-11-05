@@ -13,6 +13,7 @@ import type {
   ThemeMode,
   TeacherSnapshot
 } from '../shared/contracts'
+import type { StudentMark } from '../shared/contracts'
 
 declare global {
   interface Window {
@@ -29,7 +30,14 @@ declare global {
         classId: string,
         className: string,
         classSize?: number,
-        departmentName?: string
+        departmentName?: string,
+        lateAt?: string
+      ): Promise<TeacherSnapshot>
+      syncRoster(): Promise<TeacherSnapshot>
+      setStudentMark(
+        studentId: string,
+        mark?: StudentMark,
+        remark?: string
       ): Promise<TeacherSnapshot>
       stopSession(): Promise<TeacherSnapshot>
       markLeave(studentId: string): Promise<TeacherSnapshot>

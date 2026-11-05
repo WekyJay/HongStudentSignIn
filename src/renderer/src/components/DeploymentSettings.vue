@@ -173,6 +173,24 @@ async function save(): Promise<void> {
         </div>
       </section>
 
+      <section class="setup-section">
+        <div class="section-title">
+          <Check :size="17" />
+          <div>
+            <h3>签到完成后</h3>
+            <p>控制每台学生电脑签到成功后的页面状态</p>
+          </div>
+        </div>
+        <label class="setup-field">
+          <span>签到成功后关闭签到页面</span>
+          <select v-model="form.closeAfterCheckin">
+            <option :value="true">关闭（默认）</option>
+            <option :value="false">不关闭</option>
+          </select>
+        </label>
+        <p class="network-hint">关闭时，学生端将在下一次场次同步后收起签到页面。</p>
+      </section>
+
       <details class="setup-advanced">
         <summary>高级网络设置</summary>
         <div class="setup-advanced-content">
@@ -311,7 +329,8 @@ async function save(): Promise<void> {
 .setup-field + .setup-field {
   margin-top: 14px;
 }
-.setup-field input {
+.setup-field input,
+.setup-field select {
   width: 100%;
   height: 39px;
   padding: 0 11px;
@@ -419,7 +438,9 @@ async function save(): Promise<void> {
   animation: spin 1s linear infinite;
 }
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 @media (max-width: 640px) {
   .setup-shell.is-standalone {

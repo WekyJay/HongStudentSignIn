@@ -14,6 +14,7 @@ import type {
   ThemeMode,
   TeacherSnapshot
 } from '../shared/contracts'
+import type { StudentMark } from '../shared/contracts'
 
 const api = {
   getRuntimeInfo: (): Promise<RuntimeInfo> => ipcRenderer.invoke('runtime:info'),
@@ -31,9 +32,16 @@ const api = {
     classId: string,
     className: string,
     classSize?: number,
-    departmentName?: string
+    departmentName?: string,
+    lateAt?: string
   ): Promise<TeacherSnapshot> =>
-    ipcRenderer.invoke('teacher:start', classId, className, classSize, departmentName),
+    ipcRenderer.invoke('teacher:start', classId, className, classSize, departmentName, lateAt),
+  syncRoster: (): Promise<TeacherSnapshot> => ipcRenderer.invoke('teacher:sync-roster'),
+  setStudentMark: (
+    studentId: string,
+    mark?: StudentMark,
+    remark?: string
+  ): Promise<TeacherSnapshot> => ipcRenderer.invoke('teacher:set-mark', studentId, mark, remark),
   stopSession: (): Promise<TeacherSnapshot> => ipcRenderer.invoke('teacher:stop'),
   markLeave: (studentId: string): Promise<TeacherSnapshot> =>
     ipcRenderer.invoke('teacher:mark-leave', studentId),

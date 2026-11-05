@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
+import { Eye, EyeOff, Keyboard, Delete } from '@lucide/vue'
 import { storeToRefs } from 'pinia'
 import { useRuntimeStore } from '../stores/runtime'
 import { useStudentStore } from '../stores/student'
@@ -10,9 +11,28 @@ const studentStore = useStudentStore()
 const { runtime } = storeToRefs(runtimeStore)
 const { session, idCard, result, connectionError, busy, canSubmit } = storeToRefs(studentStore)
 const idCardInput = useTemplateRef<HTMLInputElement>('idCardInput')
+const showIdCard = shallowRef(false)
+const showKeypad = shallowRef(false)
+const keypadKeys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '清空', '0', 'X', '退格']
+
+function onIdInput(event: Event): void {
+  idCard.value = (event.target as HTMLInputElement).value
+    .toUpperCase()
+    .replace(/[^0-9X]/g, '')
+    .slice(0, 18)
+}
+
+function pressKey(key: string): void {
+  if (key === '清空') idCard.value = ''
+  else if (key === '退格') idCard.value = idCard.value.slice(0, -1)
+  else if (idCard.value.length < 18 && (key !== 'X' || idCard.value.length === 17))
+    idCard.value += key
+}
 
 const isSuccess = computed(() => result.value?.code === 'SUCCESS')
-const schoolName = computed(() => session.value?.schoolName || runtime.value?.schoolName || '学校名称')
+const schoolName = computed(
+  () => session.value?.schoolName || runtime.value?.schoolName || '学校名称'
+)
 const isLeave = computed(() => result.value?.code === 'ON_LEAVE')
 const successDepartment = computed(
   () => result.value?.departmentName || session.value?.departmentName || ''
@@ -46,7 +66,13 @@ watch(
     </div>
 
     <div class="stage">
-      <img v-if="runtime?.schoolLogoDataUrl" class="brand-logo" :src="runtime.schoolLogoDataUrl" :alt="schoolName" draggable="false" />
+      <img
+        v-if="runtime?.schoolLogoDataUrl"
+        class="brand-logo"
+        :src="runtime.schoolLogoDataUrl"
+        :alt="schoolName"
+        draggable="false"
+      />
       <h1 class="brand-title">{{ schoolName }}</h1>
       <p class="brand-subtitle">学生身份核验终端</p>
 
@@ -73,21 +99,54 @@ watch(
         <div v-if="session?.active">
           <form @submit.prevent="studentStore.submit">
             <label for="id-card" class="field-label">居民身份证号码</label>
-            <input
-              id="id-card"
-              ref="idCardInput"
-              v-model="idCard"
-              class="identity-input"
-              type="password"
-              inputmode="text"
-              maxlength="18"
-              autocomplete="off"
-              autocapitalize="characters"
-              spellcheck="false"
-              aria-describedby="id-card-help"
-              placeholder="请输入 18 位身份证号码"
-            />
-            <p id="id-card-help" class="field-help">末位为 X 时，请使用键盘输入字母 X</p>
+            <div class="identity-field">
+              <input
+                id="id-card"
+                ref="idCardInput"
+                v-model="idCard"
+                class="identity-input"
+                :type="showIdCard ? 'text' : 'password'"
+                inputmode="text"
+                maxlength="18"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                aria-describedby="id-card-help"
+                placeholder="请输入 18 位身份证号码"
+                @input="onIdInput"
+              /><button
+                type="button"
+                class="eye-button"
+                :aria-label="showIdCard ? '隐藏身份证号码' : '显示身份证号码'"
+                :aria-pressed="showIdCard"
+                @click="showIdCard = !showIdCard"
+              >
+                <EyeOff v-if="showIdCard" :size="20" /><Eye v-else :size="20" />
+              </button>
+            </div>
+            <div class="input-tools">
+              <p id="id-card-help" class="field-help">末位可输入 X</p>
+              <button
+                type="button"
+                class="keypad-toggle"
+                :aria-expanded="showKeypad"
+                @click="showKeypad = !showKeypad"
+              >
+                <Keyboard :size="16" />{{ showKeypad ? '收起小键盘' : '打开身份证小键盘' }}
+              </button>
+            </div>
+            <div v-if="showKeypad" class="id-keypad" aria-label="身份证小键盘">
+              <button
+                v-for="key in keypadKeys"
+                :key="key"
+                type="button"
+                :class="{ 'keypad-special': key === '清空' || key === '退格' }"
+                :aria-label="key === '退格' ? '删除上一位' : key"
+                @click="pressKey(key)"
+              >
+                <Delete v-if="key === '退格'" :size="20" /><template v-else>{{ key }}</template>
+              </button>
+            </div>
             <Button class="submit-btn" type="submit" :disabled="!canSubmit">
               {{ busy ? '正在核对信息…' : '确认签到' }}
             </Button>
@@ -164,7 +223,9 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
-  overflow: hidden;
+  height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
   background:
     radial-gradient(58% 44% at 18% 0%, rgba(192, 51, 45, 0.08), transparent 70%),
     radial-gradient(66% 52% at 88% 100%, rgba(27, 92, 157, 0.12), transparent 72%),
@@ -302,7 +363,7 @@ watch(
 .identity-input {
   width: 100%;
   height: 68px;
-  padding: 0 20px;
+  padding: 0 54px 0 20px;
   border: 1.5px solid #ccd9ec;
   border-radius: 14px;
   outline: none;
@@ -314,6 +375,76 @@ watch(
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;
+}
+.identity-field {
+  position: relative;
+}
+.eye-button {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #50648a;
+  cursor: pointer;
+}
+.eye-button:hover,
+.keypad-toggle:hover {
+  background: #edf4ff;
+}
+.eye-button:focus-visible,
+.keypad-toggle:focus-visible,
+.id-keypad button:focus-visible {
+  outline: 2px solid #3478f6;
+  outline-offset: 2px;
+}
+.input-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.keypad-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #3478f6;
+  font-size: 13px;
+  cursor: pointer;
+}
+.id-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 8px 0 14px;
+}
+.id-keypad button {
+  min-height: 42px;
+  border: 1px solid #d8e3f2;
+  border-radius: 9px;
+  background: #f5f8fd;
+  color: #17345e;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.id-keypad button:hover {
+  background: #eaf2ff;
+}
+.id-keypad .keypad-special {
+  color: #50648a;
+  font-size: 14px;
 }
 
 .identity-input:focus {

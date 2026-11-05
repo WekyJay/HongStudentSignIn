@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import type { TeacherSnapshot } from '../../../shared/contracts'
+import type { StudentMark } from '../../../shared/contracts'
 
 export const useTeacherStore = defineStore('teacher', () => {
   const snapshot = shallowRef<TeacherSnapshot | null>(null)
@@ -40,7 +41,8 @@ export const useTeacherStore = defineStore('teacher', () => {
     classId: string,
     className: string,
     classSize?: number,
-    departmentName?: string
+    departmentName?: string,
+    lateAt?: string
   ): Promise<void> {
     busy.value = true
     error.value = ''
@@ -49,7 +51,8 @@ export const useTeacherStore = defineStore('teacher', () => {
         classId,
         className,
         classSize,
-        departmentName
+        departmentName,
+        lateAt
       )
     } catch (cause) {
       error.value = (cause as Error).message
@@ -77,6 +80,32 @@ export const useTeacherStore = defineStore('teacher', () => {
       snapshot.value = await window.signIn.markLeave(studentId)
     } catch (cause) {
       error.value = (cause as Error).message
+    }
+  }
+
+  async function syncRoster(): Promise<void> {
+    busy.value = true
+    error.value = ''
+    try {
+      snapshot.value = await window.signIn.syncRoster()
+    } catch (cause) {
+      error.value = (cause as Error).message
+    } finally {
+      busy.value = false
+    }
+  }
+
+  async function setMark(studentId: string, mark?: StudentMark, remark?: string): Promise<boolean> {
+    busy.value = true
+    error.value = ''
+    try {
+      snapshot.value = await window.signIn.setStudentMark(studentId, mark, remark)
+      return true
+    } catch (cause) {
+      error.value = (cause as Error).message
+      return false
+    } finally {
+      busy.value = false
     }
   }
 
@@ -124,6 +153,8 @@ export const useTeacherStore = defineStore('teacher', () => {
     startSession,
     stopSession,
     markLeave,
+    syncRoster,
+    setMark,
     clearLeave,
     resetCheckin,
     resetSessionCheckins
