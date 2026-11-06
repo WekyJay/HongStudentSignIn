@@ -31,6 +31,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   }
 
   function syncWindowTheme(mode: ThemeMode): void {
+    if (typeof window.signIn?.setThemeMode !== 'function') return
     void window.signIn.setThemeMode(mode).catch((error: unknown) => {
       console.error('同步窗口主题失败', error)
     })

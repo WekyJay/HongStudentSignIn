@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
@@ -20,6 +21,7 @@ import type {
   ArchivedEntryUpdate,
   AttendanceArchiveQuery,
   CheckinResult,
+  ConnectedTerminal,
   PublicSession,
   RuntimeInfo,
   SchoolAuthState,
@@ -32,6 +34,7 @@ import { startTeacherServer } from './http-server'
 import { discoverTeacherUrl, getTeacherLanUrl, startTeacherDiscovery } from './teacher-discovery'
 import { SchoolApiClient } from './school-api'
 import { TeacherService } from './teacher-service'
+import { TerminalRegistry } from './terminal-registry'
 import { AttendanceArchive } from './attendance-archive'
 import { exportAttendanceExcel } from './attendance-export'
 
@@ -86,6 +89,8 @@ if (!singleInstance) app.quit()
 let mainWindow: BrowserWindow | null = null
 let allowStudentClose = false
 let studentSessionActive = false
+let studentRemotePageLoaded = false
+let studentPageLoad: Promise<void> | null = null
 // 教师端关闭窗口只隐藏到托盘，只有托盘「退出程序」才真正结束进程
 let teacherQuitting = false
 
@@ -134,6 +139,7 @@ function createWindow(config: AppConfig, teacherAuthenticated: boolean): Browser
     kiosk: studentKiosk,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
+      additionalArguments: config.role === 'student' ? ['--student-shell'] : [],
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -169,12 +175,17 @@ function createWindow(config: AppConfig, teacherAuthenticated: boolean): Browser
   window.on('unmaximize', () => window.webContents.send('window:maximized', false))
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => {
+    if (config.role === 'student' && isTrustedStudentPage(event.url, config)) return
     // 微信扫码回调交给主进程换 token，其余跳转一律禁止
     if (config.wechatRedirectUri && event.url.startsWith(config.wechatRedirectUri)) {
       event.preventDefault()
       handleWechatCallback(event.url)
       return
     }
+    event.preventDefault()
+  })
+  window.webContents.on('will-redirect', (event, url) => {
+    if (config.role === 'student' && isTrustedStudentPage(url, config)) return
     event.preventDefault()
   })
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
@@ -185,10 +196,15 @@ function createWindow(config: AppConfig, teacherAuthenticated: boolean): Browser
   return window
 }
 
-async function fetchTeacher<T>(config: AppConfig, path: string, init?: RequestInit): Promise<T> {
+async function fetchTeacher<T>(
+  config: AppConfig,
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 8000
+): Promise<T> {
   const teacherUrl = config.teacherUrl || (discoveredTeacherUrl ??= await discoverTeacherUrl())
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 8000)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(new URL(path, teacherUrl), {
       ...init,
@@ -200,6 +216,18 @@ async function fetchTeacher<T>(config: AppConfig, path: string, init?: RequestIn
     throw error
   } finally {
     clearTimeout(timer)
+  }
+}
+
+function isTrustedStudentPage(url: string, config: AppConfig): boolean {
+  const teacherUrl = config.teacherUrl || discoveredTeacherUrl
+  if (!teacherUrl) return false
+  try {
+    const destination = new URL(url)
+    const teacher = new URL(teacherUrl)
+    return destination.origin === teacher.origin && destination.pathname === '/student'
+  } catch {
+    return false
   }
 }
 
@@ -281,12 +309,38 @@ function createTeacherTray(): void {
   console.info('[teacher-tray] ready')
 }
 
-function setStudentWindowActive(active: boolean): void {
+function setStudentWindowActive(active: boolean, config: AppConfig, reload = false): void {
   const window = mainWindow
   if (!window) return
   if (active) {
     window.setKiosk(true)
     window.setAlwaysOnTop(true, 'screen-saver')
+    if (!studentRemotePageLoaded || reload) {
+      if (studentPageLoad) return
+      studentPageLoad = (async () => {
+        const teacherUrl =
+          config.teacherUrl || (discoveredTeacherUrl ??= await discoverTeacherUrl())
+        if (!teacherUrl) throw new Error('找不到教师端页面')
+        const pageUrl = new URL('/student', teacherUrl)
+        pageUrl.hash = '/student'
+        await window.loadURL(pageUrl.toString())
+        studentRemotePageLoaded = true
+        if (studentSessionActive && mainWindow === window) {
+          window.show()
+          window.focus()
+          window.webContents.send('student:session-started')
+        }
+      })()
+        .catch((error) => {
+          studentRemotePageLoaded = false
+          console.warn('[student-kiosk] failed to load teacher page:', (error as Error).message)
+          updateStudentTray('offline')
+        })
+        .finally(() => {
+          studentPageLoad = null
+        })
+      return
+    }
     if (!window.isVisible()) {
       // 开机自启时页面可能还没加载完，等首屏渲染后再显示，避免白屏闪烁
       if (window.webContents.isLoading()) {
@@ -300,23 +354,75 @@ function setStudentWindowActive(active: boolean): void {
     window.focus()
   } else {
     window.setAlwaysOnTop(false)
+    window.setKiosk(false)
     if (window.isVisible()) window.hide()
   }
 }
 
 function startStudentSessionMonitor(config: AppConfig): void {
+  let lastCaptureAt = 0
+  let reporting = false
+  const reportPresence = async (): Promise<void> => {
+    if (reporting) return
+    reporting = true
+    try {
+      let screenDataUrl: string | undefined
+      if (Date.now() - lastCaptureAt >= 9000) {
+        lastCaptureAt = Date.now()
+        try {
+          const sources = await desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width: 640, height: 360 }
+          })
+          const primaryDisplayId = String(screen.getPrimaryDisplay().id)
+          const source = sources.find((item) => item.display_id === primaryDisplayId) ?? sources[0]
+          if (source && !source.thumbnail.isEmpty()) {
+            const jpeg = source.thumbnail.toJPEG(45)
+            if (jpeg.length < 240_000) {
+              screenDataUrl = `data:image/jpeg;base64,${jpeg.toString('base64')}`
+            }
+          }
+        } catch (error) {
+          console.warn('[student-screen] capture failed:', (error as Error).message)
+        }
+      }
+      await fetchTeacher(config, '/api/v1/terminals/presence', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stationId: hostname(), screenDataUrl })
+      }, 3500)
+    } catch (error) {
+      console.warn('[student-screen] report failed:', (error as Error).message)
+    } finally {
+      reporting = false
+    }
+  }
   const poll = async (): Promise<void> => {
     try {
-      const data = await fetchTeacher<{ session: PublicSession | null }>(config, '/api/v1/session')
+      const data = await fetchTeacher<{ session: PublicSession | null }>(
+        config,
+        '/api/v1/session',
+        undefined,
+        2500
+      )
       const session = data.session
       const active = Boolean(session?.active)
       if (active !== studentSessionActive || (active && !mainWindow?.isVisible())) {
+        const enteringSession = active && !studentSessionActive
         studentSessionActive = active
-        setStudentWindowActive(active)
+        setStudentWindowActive(active, config, enteringSession)
       }
-      updateStudentTray(active ? 'active' : 'idle', session?.className)
+      updateStudentTray(
+        active ? (studentRemotePageLoaded ? 'active' : 'offline') : 'idle',
+        session?.className
+      )
+      void reportPresence()
     } catch {
-      // 教师机断线时保持当前画面不变，避免学生借断网退出 kiosk
+      if (studentSessionActive) {
+        studentSessionActive = false
+        studentRemotePageLoaded = false
+        setStudentWindowActive(false, config)
+      }
       updateStudentTray('offline')
     } finally {
       setTimeout(() => void poll(), 3000)
@@ -339,9 +445,11 @@ app.whenReady().then(async () => {
     activeAppIconPath = applicationIconPathForSchoolLogo(config.schoolLogoPath)
     const schoolApi = new SchoolApiClient(
       config.schoolServerUrl!,
-      join(app.getPath('userData'), 'school-auth.json')
+      join(app.getPath('userData'), 'school-auth.json'),
+      join(app.getPath('userData'), 'student-avatar-cache')
     )
     let service: TeacherService | null = null
+    const terminals = new TerminalRegistry()
     let attendanceArchive: AttendanceArchive | null = null
     let serverError: string | undefined
     let stopServer: (() => Promise<void>) | undefined
@@ -356,7 +464,10 @@ app.whenReady().then(async () => {
       )
       await service.load()
       try {
-        stopServer = await startTeacherServer(config, service)
+        stopServer = await startTeacherServer(config, service, terminals, join(__dirname, '../renderer'), {
+          schoolName: config.schoolName || '学校名称',
+          schoolLogoDataUrl: loadSchoolLogo(config.schoolLogoPath)
+        })
         stopDiscovery = await startTeacherDiscovery(config)
       } catch (error) {
         serverError = (error as Error).message
@@ -476,6 +587,46 @@ app.whenReady().then(async () => {
       }
     })
 
+    ipcMain.handle('runtime:student-info', async (event): Promise<RuntimeInfo> => {
+      if (!permitted(event.sender.id, 'student')) throw new Error('无权访问')
+      let schoolName = config.schoolName || '学校名称'
+      let schoolLogoDataUrl = loadSchoolLogo(config.schoolLogoPath)
+      if (event.senderFrame && isTrustedStudentPage(event.senderFrame.url, config)) {
+        try {
+          const branding = await fetchTeacher<{
+            schoolName?: string
+            schoolLogoDataUrl?: string | null
+          }>(config, '/api/v1/runtime', undefined, 2500)
+          schoolName = branding.schoolName?.trim() || schoolName
+          if ('schoolLogoDataUrl' in branding) {
+            schoolLogoDataUrl = branding.schoolLogoDataUrl ?? null
+          }
+        } catch {
+          // Fall back to the terminal's saved branding while the teacher is unavailable.
+        }
+      }
+      return {
+        role: 'student',
+        schoolName,
+        schoolLogoDataUrl,
+        stationId: hostname(),
+        teacherUrl: config.teacherUrl || discoveredTeacherUrl || '',
+        schoolServerUrl: '',
+        wechatAppId: '',
+        wechatRedirectUri: '',
+        configPath: '',
+        appSettings: {
+          schoolName,
+          schoolLogoPath: '',
+          schoolServerUrl: '',
+          wechatAppId: '',
+          wechatRedirectUri: '',
+          listenPort: config.listenPort,
+          closeAfterCheckin: config.closeAfterCheckin !== false
+        }
+      }
+    })
+
     ipcMain.handle(
       'settings:select-logo',
       async (event): Promise<{ path: string; preview: string } | null> => {
@@ -589,6 +740,17 @@ app.whenReady().then(async () => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       return schoolApi.getProfile(force === true)
     })
+    ipcMain.handle('school:student-avatar', async (event, avatarUrl: unknown, size: unknown) => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      if (
+        typeof avatarUrl !== 'string' ||
+        avatarUrl.length > 4096 ||
+        (size !== 'thumbnail' && size !== 'preview')
+      ) {
+        throw new Error('头像参数无效')
+      }
+      return schoolApi.getStudentAvatar(avatarUrl, size)
+    })
     ipcMain.handle('school:classes', async (event) => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       return requireService().listClasses()
@@ -596,6 +758,10 @@ app.whenReady().then(async () => {
     ipcMain.handle('teacher:snapshot', (event) => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       return requireService().snapshot()
+    })
+    ipcMain.handle('teacher:terminals', (event): ConnectedTerminal[] => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      return terminals.list()
     })
     ipcMain.handle(
       'teacher:start',
@@ -773,7 +939,7 @@ app.whenReady().then(async () => {
         if (result.code === 'SUCCESS' && config.closeAfterCheckin !== false) {
           setTimeout(() => {
             studentSessionActive = false
-            setStudentWindowActive(false)
+            setStudentWindowActive(false, config)
           }, 2500)
         }
         return result

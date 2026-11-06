@@ -74,6 +74,7 @@ export interface SessionStudent {
   studentName: string
   idCard: string
   gender?: number
+  avatarUrl?: string | null
 }
 
 export interface ClassRoster {
@@ -91,6 +92,7 @@ export interface RosterEntry {
   studentId: string
   studentName: string
   gender?: number
+  avatarUrl?: string | null
   attendance: AttendanceStatus
   signedAt?: string
   stationId?: string
@@ -129,6 +131,13 @@ export interface TeacherSnapshot {
   /** 名单与学校数据不一致时的提示（人数不符、记录缺失等），null 表示完整 */
   rosterNotice: string | null
   directoryReady: boolean
+}
+
+export interface ConnectedTerminal {
+  stationId: string
+  lastSeenAt: string
+  screenCapturedAt?: string
+  screenDataUrl?: string
 }
 
 export interface AttendanceArchiveQuery {

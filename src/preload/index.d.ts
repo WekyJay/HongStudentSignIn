@@ -4,6 +4,7 @@ import type {
   AttendanceArchivePage,
   AttendanceArchiveQuery,
   CheckinResult,
+  ConnectedTerminal,
   AppSettings,
   PublicSession,
   RuntimeInfo,
@@ -24,8 +25,10 @@ declare global {
       getSchoolStatus(): Promise<SchoolAuthState>
       schoolLogout(): Promise<SchoolAuthState>
       getSchoolProfile(force?: boolean): Promise<SchoolProfile>
+      getStudentAvatar(avatarUrl: string, size: 'thumbnail' | 'preview'): Promise<string | null>
       getSchoolClasses(): Promise<SchoolClass[]>
       getTeacherSnapshot(): Promise<TeacherSnapshot>
+      getConnectedTerminals(): Promise<ConnectedTerminal[]>
       startSession(
         classId: string,
         className: string,

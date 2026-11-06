@@ -3,7 +3,7 @@ import { nextTick, useTemplateRef, watch } from 'vue'
 import { X } from '@lucide/vue'
 
 const open = defineModel<boolean>('open', { required: true })
-defineProps<{ title: string; description?: string }>()
+defineProps<{ title: string; description?: string; wide?: boolean }>()
 const dialog = useTemplateRef<HTMLDialogElement>('dialog')
 watch(
   open,
@@ -21,6 +21,7 @@ watch(
     <dialog
       ref="dialog"
       class="dialog-panel"
+      :class="{ 'dialog-wide': wide }"
       :aria-label="title"
       @cancel.prevent="open = false"
       @close="open = false"
@@ -53,7 +54,11 @@ watch(
   outline: none;
 }
 .dialog-panel::backdrop {
-  background: hsl(217 52% 12% / 0.55);
+  background: rgb(12 17 24 / 0.68);
+  backdrop-filter: blur(9px) saturate(0.75);
+}
+.dialog-wide {
+  width: min(100%, 960px);
 }
 .dialog-header {
   display: flex;

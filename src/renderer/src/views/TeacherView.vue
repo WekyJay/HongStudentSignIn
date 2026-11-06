@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   Activity,
@@ -37,6 +37,7 @@ import Card from '../components/ui/card/Card.vue'
 import SchoolLogin from '../components/SchoolLogin.vue'
 import DeploymentSettings from '../components/DeploymentSettings.vue'
 import AttendanceHistory from '../components/AttendanceHistory.vue'
+import ConnectionManagement from '../components/ConnectionManagement.vue'
 import ClassPicker from '../components/ClassPicker.vue'
 import Dialog from '../components/ui/dialog/Dialog.vue'
 import type { RosterEntry, StudentMark } from '../../../shared/contracts'
@@ -45,7 +46,7 @@ import { useSchoolStore } from '../stores/school'
 import { useTeacherStore } from '../stores/teacher'
 import { usePreferencesStore, type ThemeMode } from '../stores/preferences'
 
-type TeacherSection = 'overview' | 'session' | 'records' | 'terminal' | 'settings'
+type TeacherSection = 'overview' | 'session' | 'records' | 'connections' | 'terminal' | 'settings'
 
 const runtimeStore = useRuntimeStore()
 const schoolStore = useSchoolStore()
@@ -76,6 +77,15 @@ const markDraft = ref<'' | StudentMark>('')
 const remarkDraft = ref('')
 const markDialogOpen = ref(false)
 const idDialogOpen = ref(false)
+const avatarPreview = ref<{ name: string; src: string } | null>(null)
+const avatarPreviewOpen = computed({
+  get: () => avatarPreview.value !== null,
+  set: (open: boolean) => {
+    if (!open) avatarPreview.value = null
+  }
+})
+const avatarImages = reactive(new Map<string, string>())
+const pendingAvatarImages = new Set<string>()
 let removeWindowListener: (() => void) | undefined
 
 const menuItems: {
@@ -86,6 +96,7 @@ const menuItems: {
   { id: 'overview', label: '工作台', icon: LayoutDashboard },
   { id: 'session', label: '场次管理', icon: ClipboardList },
   { id: 'records', label: '签到记录', icon: ListChecks },
+  { id: 'connections', label: '连接管理', icon: Monitor },
   { id: 'terminal', label: '终端信息', icon: Computer },
   { id: 'settings', label: '设置', icon: Settings2 }
 ]
@@ -130,6 +141,57 @@ const todayLabel = new Intl.DateTimeFormat('zh-CN', {
 const profileInitial = computed(
   () => (schoolProfile.value?.displayName || '师').trim().slice(0, 1) || '师'
 )
+
+function avatarImageKey(url: string, size: 'thumbnail' | 'preview'): string {
+  return `${size}:${url}`
+}
+
+async function loadStudentAvatar(
+  url: string | null | undefined,
+  size: 'thumbnail' | 'preview'
+): Promise<string | null> {
+  if (!url) return null
+  const key = avatarImageKey(url, size)
+  const cached = avatarImages.get(key)
+  if (cached) return cached
+  if (pendingAvatarImages.has(key)) return null
+  pendingAvatarImages.add(key)
+  try {
+    const image = await window.signIn.getStudentAvatar(url, size)
+    if (image) avatarImages.set(key, image)
+    return image
+  } catch {
+    return null
+  } finally {
+    pendingAvatarImages.delete(key)
+  }
+}
+
+watch(
+  () =>
+    snapshot.value?.roster?.flatMap((entry) => (entry.avatarUrl ? [entry.avatarUrl] : [])) ?? [],
+  (avatarUrls) => {
+    void preloadRosterAvatars([...new Set(avatarUrls)])
+  },
+  { immediate: true }
+)
+
+async function preloadRosterAvatars(avatarUrls: string[]): Promise<void> {
+  let nextIndex = 0
+  const workers = Array.from({ length: Math.min(6, avatarUrls.length) }, async () => {
+    while (nextIndex < avatarUrls.length) {
+      const avatarUrl = avatarUrls[nextIndex++]
+      await loadStudentAvatar(avatarUrl, 'thumbnail')
+    }
+  })
+  await Promise.all(workers)
+}
+
+async function openAvatarPreview(entry: RosterEntry): Promise<void> {
+  if (!entry.avatarUrl) return
+  const src = await loadStudentAvatar(entry.avatarUrl, 'preview')
+  if (src) avatarPreview.value = { name: entry.studentName, src }
+}
 
 function setSection(section: TeacherSection): void {
   activeSection.value = section
@@ -259,6 +321,17 @@ onUnmounted(() => {
     description="仅供现场核对，请勿向无关人员展示。"
   >
     <p class="full-id-card tabular-nums">{{ idCardEntry?.idCard || '暂无身份证号码' }}</p>
+  </Dialog>
+  <Dialog
+    v-model:open="avatarPreviewOpen"
+    :title="avatarPreview ? `${avatarPreview.name}的头像` : '学生头像'"
+  >
+    <img
+      v-if="avatarPreview"
+      class="student-avatar-preview"
+      :src="avatarPreview.src"
+      :alt="`${avatarPreview.name}的头像预览`"
+    />
   </Dialog>
   <Dialog
     v-model:open="markDialogOpen"
@@ -781,8 +854,24 @@ onUnmounted(() => {
                       <td class="tabular-nums">{{ index + 1 }}</td>
                       <td>
                         <div class="flex items-center gap-3">
-                          <span class="record-avatar">{{ entry.studentName.slice(0, 1) }}</span
-                          ><strong>{{ entry.studentName }}</strong>
+                          <button
+                            v-if="entry.avatarUrl"
+                            type="button"
+                            class="record-avatar record-avatar-button"
+                            :aria-label="`预览${entry.studentName}的头像`"
+                            @click="openAvatarPreview(entry)"
+                          >
+                            <img
+                              v-if="avatarImages.get(avatarImageKey(entry.avatarUrl, 'thumbnail'))"
+                              :src="avatarImages.get(avatarImageKey(entry.avatarUrl, 'thumbnail'))"
+                              :alt="`${entry.studentName}的头像`"
+                            />
+                            <span v-else>{{ entry.studentName.slice(0, 1) }}</span>
+                          </button>
+                          <span v-else class="record-avatar">
+                            {{ entry.studentName.slice(0, 1) }}
+                          </span>
+                          <strong>{{ entry.studentName }}</strong>
                         </div>
                       </td>
                       <td>
@@ -851,6 +940,12 @@ onUnmounted(() => {
             </Card>
           </template>
         </div>
+
+        <ConnectionManagement
+          v-else-if="activeSection === 'connections'"
+          :checkins="snapshot?.checkins ?? []"
+          :session-active="Boolean(snapshot?.session?.active)"
+        />
 
         <div v-else-if="activeSection === 'terminal'" class="mx-auto max-w-280">
           <div class="mb-6">
@@ -1324,6 +1419,29 @@ onUnmounted(() => {
   color: #3478f6;
   font-size: 13px;
   font-weight: 700;
+}
+.record-avatar-button {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+.record-avatar-button:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+.record-avatar-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.student-avatar-preview {
+  display: block;
+  width: min(100%, 420px);
+  max-height: 70vh;
+  margin: 0 auto;
+  border-radius: 12px;
+  object-fit: contain;
 }
 .record-person {
   display: grid;

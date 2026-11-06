@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import type { RuntimeInfo } from '../../../shared/contracts'
+import { getStudentRuntimeInfo } from '../lib/student-client'
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const runtime = shallowRef<RuntimeInfo | null>(null)
@@ -10,7 +11,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   async function initialize(): Promise<void> {
     if (initialized.value) return
     try {
-      runtime.value = await window.signIn.getRuntimeInfo()
+      runtime.value = await getStudentRuntimeInfo()
     } catch (cause) {
       error.value = (cause as Error).message
     } finally {

@@ -1,6 +1,11 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import type { CheckinResult, PublicSession } from '../../../shared/contracts'
+import {
+  getStudentSession,
+  onStudentSessionStarted,
+  submitStudentCheckin
+} from '../lib/student-client'
 
 export const useStudentStore = defineStore('student', () => {
   const session = shallowRef<PublicSession | null>(null)
@@ -24,7 +29,7 @@ export const useStudentStore = defineStore('student', () => {
     if (refreshing.value) return
     refreshing.value = true
     try {
-      const next = await window.signIn.getStudentSession()
+      const next = await getStudentSession()
       if (next?.id !== session.value?.id) result.value = null
       session.value = next
       connectionError.value = ''
@@ -39,7 +44,7 @@ export const useStudentStore = defineStore('student', () => {
   function startPolling(): void {
     stopPolling()
     polling.value = true
-    unsubscribeSessionStarted = window.signIn.onSessionStarted(() => void refresh())
+    unsubscribeSessionStarted = onStudentSessionStarted(() => void refresh())
     void refresh()
     timer = setInterval(() => void refresh(), 4000)
   }
@@ -58,10 +63,7 @@ export const useStudentStore = defineStore('student', () => {
     busy.value = true
     result.value = null
     try {
-      result.value = await window.signIn.checkin(
-        activeSession.id,
-        idCard.value.trim().toUpperCase()
-      )
+      result.value = await submitStudentCheckin(activeSession.id, idCard.value.trim().toUpperCase())
     } catch {
       result.value = { code: 'NETWORK_ERROR', message: '提交失败，请检查网络后重试' }
     } finally {

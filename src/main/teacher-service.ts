@@ -111,6 +111,7 @@ export class TeacherService {
             studentId: student.studentId,
             studentName: student.studentName,
             gender: student.gender,
+            avatarUrl: student.avatarUrl,
             attendance: record ? (late ? 'late' : 'signed') : onLeave ? 'leave' : 'absent',
             signedAt: record?.signedAt,
             stationId: record?.stationId,

@@ -5,6 +5,7 @@ import type {
   AttendanceArchivePage,
   AttendanceArchiveQuery,
   CheckinResult,
+  ConnectedTerminal,
   AppSettings,
   PublicSession,
   RuntimeInfo,
@@ -16,7 +17,7 @@ import type {
 } from '../shared/contracts'
 import type { StudentMark } from '../shared/contracts'
 
-const api = {
+const teacherApi = {
   getRuntimeInfo: (): Promise<RuntimeInfo> => ipcRenderer.invoke('runtime:info'),
   saveAppSettings: (settings: AppSettings): Promise<void> =>
     ipcRenderer.invoke('settings:save', settings),
@@ -26,8 +27,11 @@ const api = {
   schoolLogout: (): Promise<SchoolAuthState> => ipcRenderer.invoke('school:logout'),
   getSchoolProfile: (force = false): Promise<SchoolProfile> =>
     ipcRenderer.invoke('school:profile', force),
+  getStudentAvatar: (avatarUrl: string, size: 'thumbnail' | 'preview'): Promise<string | null> =>
+    ipcRenderer.invoke('school:student-avatar', avatarUrl, size),
   getSchoolClasses: (): Promise<SchoolClass[]> => ipcRenderer.invoke('school:classes'),
   getTeacherSnapshot: (): Promise<TeacherSnapshot> => ipcRenderer.invoke('teacher:snapshot'),
+  getConnectedTerminals: (): Promise<ConnectedTerminal[]> => ipcRenderer.invoke('teacher:terminals'),
   startSession: (
     classId: string,
     className: string,
@@ -101,4 +105,20 @@ const api = {
   }
 }
 
-contextBridge.exposeInMainWorld('signIn', api)
+const studentApi = {
+  getRuntimeInfo: () => ipcRenderer.invoke('runtime:student-info'),
+  setThemeMode: (mode: ThemeMode): Promise<void> => ipcRenderer.invoke('theme:set', mode),
+  getStudentSession: (): Promise<PublicSession | null> => ipcRenderer.invoke('student:session'),
+  checkin: (sessionId: string, idCard: string): Promise<CheckinResult> =>
+    ipcRenderer.invoke('student:checkin', sessionId, idCard),
+  onSessionStarted: (listener: () => void): (() => void) => {
+    const handler = (): void => listener()
+    ipcRenderer.on('student:session-started', handler)
+    return () => ipcRenderer.removeListener('student:session-started', handler)
+  }
+}
+
+contextBridge.exposeInMainWorld(
+  'signIn',
+  process.argv.includes('--student-shell') ? studentApi : teacherApi
+)

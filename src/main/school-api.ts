@@ -1,6 +1,7 @@
 import { safeStorage } from 'electron'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { dirname, join } from 'node:path'
 import type { ClassRoster, SchoolClass, SchoolProfile, SessionStudent } from '../shared/contracts'
 
 interface Result<T> {
@@ -28,6 +29,7 @@ interface StudentRecord {
   name?: string
   idCard?: string
   gender?: number
+  avatar?: string
 }
 
 interface StudentPage {
@@ -58,6 +60,7 @@ interface UserInfoRecord {
 }
 
 const PAGE_LIMIT = 200
+const ACCESS_TOKEN_REFRESH_WINDOW_MS = 60_000
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024
 const AVATAR_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
@@ -76,6 +79,15 @@ function imageTypeFromUrl(url: URL): string | null {
   return null
 }
 
+// Follows HongSchoolUniapp/common/utils/imageTools.js: process OSS avatars
+// with the same thumbnail styles (xs for list rows, xl for the preview).
+function processStudentAvatarUrl(url: string, size: 'thumbnail' | 'preview'): string {
+  if (!url || !url.includes('oss.zzch.cn') || url.startsWith('data:')) return url
+  if (url.includes('x-oss-process=')) return url
+  const suffix = size === 'thumbnail' ? 'x64' : 'x1024'
+  return `${url}${url.includes('?') ? '&' : '?'}x-oss-process=style/thumbnail${suffix}`
+}
+
 export class SchoolApiClient {
   private token: string | null = null
   private refreshToken: string | null = null
@@ -85,7 +97,8 @@ export class SchoolApiClient {
 
   constructor(
     private readonly baseUrl: string,
-    private readonly authPath: string
+    private readonly authPath: string,
+    private readonly avatarCachePath: string
   ) {}
 
   get loggedIn(): boolean {
@@ -182,6 +195,9 @@ export class SchoolApiClient {
       if (this.token && url.origin === new URL(this.baseUrl).origin) {
         headers['authorization'] = `Bearer ${this.token}`
       }
+      // OSS hotlink protection rejects requests without Referer. Keep this
+      // aligned with HongSchoolUniapp's imageTools guidance for oss.zzch.cn.
+      if (url.hostname === 'oss.zzch.cn') headers['referer'] = 'https://hxy.zzch.cn/'
       const response = await fetch(url, { headers, signal: controller.signal })
       if (!response.ok) return null
       const buffer = Buffer.from(await response.arrayBuffer())
@@ -245,7 +261,8 @@ export class SchoolApiClient {
           studentId,
           studentName: record.name,
           idCard: record.idCard.toUpperCase(),
-          gender: record.gender
+          gender: record.gender,
+          avatarUrl: record.avatar?.trim() || null
         })
       }
       const pages = data.pages ?? 1
@@ -255,20 +272,76 @@ export class SchoolApiClient {
     return { students: [...students.values()], skipped, duplicates }
   }
 
+  async getStudentAvatar(avatarUrl: string, size: 'thumbnail' | 'preview'): Promise<string | null> {
+    const source = avatarUrl.trim()
+    if (!source) return null
+    let resolvedSource = source
+    if (!source.startsWith('data:image/')) {
+      try {
+        resolvedSource = new URL(source, this.resolve('/')).toString()
+      } catch {
+        return null
+      }
+    }
+    const imageUrl = processStudentAvatarUrl(resolvedSource, size)
+    const cacheKey = createHash('sha256').update(`${size}:${imageUrl}`).digest('hex')
+    const cacheFile = join(this.avatarCachePath, `${cacheKey}.data`)
+    try {
+      return await readFile(cacheFile, 'utf8')
+    } catch {
+      // Cache miss; fetch and save below.
+    }
+    const loaded = await this.loadAvatar(imageUrl)
+    if (!loaded) return null
+    try {
+      await mkdir(this.avatarCachePath, { recursive: true })
+      await writeFile(cacheFile, loaded, 'utf8')
+    } catch {
+      // A cache write failure should not hide an otherwise usable image.
+    }
+    return loaded
+  }
+
   private resolve(path: string): URL {
     const base = this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`
     return new URL(path.replace(/^\/+/, ''), base)
   }
 
   private async request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+    if (!retried && this.shouldRefreshAccessToken()) {
+      // Renew shortly before expiry so an idle teacher window does not wait
+      // for a protected request to fail before recovering its session.
+      await this.refresh()
+    }
     const response = await this.rawRequest(path, init)
     if (response.status === 401) {
       if (retried || !(await this.refresh())) throw new Error('登录已失效，请重新登录')
       return this.request<T>(path, init, true)
     }
     const body = (await response.json()) as Result<T>
+    if (body.code === 401) {
+      if (retried || !(await this.refresh())) throw new Error(body.msg || '登录已失效，请重新登录')
+      return this.request<T>(path, init, true)
+    }
     if (body.code !== 200) throw new Error(body.msg || `学校服务返回错误（${body.code}）`)
     return body.data
+  }
+
+  private shouldRefreshAccessToken(): boolean {
+    if (!this.token) return false
+    try {
+      const payload = this.token.split('.')[1]
+      if (!payload) return false
+      const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+        exp?: unknown
+      }
+      return (
+        typeof claims.exp === 'number' &&
+        claims.exp * 1000 - Date.now() <= ACCESS_TOKEN_REFRESH_WINDOW_MS
+      )
+    } catch {
+      return false
+    }
   }
 
   private async rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
@@ -312,8 +385,16 @@ export class SchoolApiClient {
         body: JSON.stringify({ refreshToken: this.refreshToken }),
         signal: controller.signal
       }).finally(() => clearTimeout(timer))
+      if (response.status === 401) {
+        await this.clear()
+        return false
+      }
       if (!response.ok) return false
       const body = (await response.json()) as Result<LoginData>
+      if (body.code === 401) {
+        await this.clear()
+        return false
+      }
       if (body.code !== 200 || !body.data?.token) return false
       this.token = body.data.token
       this.refreshToken = body.data.refreshToken
