@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import type { AppConfig, AppRole } from '../shared/contracts'
@@ -24,13 +24,32 @@ export function resolveBuildRole(): AppRole {
 
 /** 教师端、学生端分别使用独立的用户数据目录，避免同一台机器安装两个应用时配置互相覆盖 */
 export function applyUserDataDir(role: AppRole): void {
-  if (!app.isPackaged) return
-  // 显式传入 --user-data-dir 时交给 Chromium 处理，便于调试和自动化测试
-  if (process.argv.some((arg) => arg.startsWith('--user-data-dir'))) return
-  const dir = join(app.getPath('appData'), USER_DATA_DIRS[role])
-  mkdirSync(dir, { recursive: true })
-  app.setName(USER_DATA_DIRS[role])
-  app.setPath('userData', dir)
+  const customUserDataDir = process.argv.some((arg) => arg.startsWith('--user-data-dir'))
+  if (app.isPackaged && !customUserDataDir) {
+    const dir = join(app.getPath('appData'), USER_DATA_DIRS[role])
+    mkdirSync(dir, { recursive: true })
+    app.setName(USER_DATA_DIRS[role])
+    app.setPath('userData', dir)
+  }
+
+  const userDataDir = app.getPath('userData')
+  const sessionDataDir =
+    customUserDataDir || process.platform !== 'win32' || !process.env.LOCALAPPDATA
+      ? join(userDataDir, 'session-data')
+      : join(process.env.LOCALAPPDATA, USER_DATA_DIRS[role], 'session-data')
+  mkdirSync(sessionDataDir, { recursive: true })
+
+  // Keep the saved theme preference when moving Chromium's local storage out of userData.
+  const legacyLocalStorage = join(userDataDir, 'Local Storage')
+  const migratedLocalStorage = join(sessionDataDir, 'Local Storage')
+  if (!existsSync(migratedLocalStorage) && existsSync(legacyLocalStorage)) {
+    try {
+      cpSync(legacyLocalStorage, migratedLocalStorage, { recursive: true, force: false })
+    } catch (error) {
+      console.warn('[session-data] local storage migration skipped:', (error as Error).message)
+    }
+  }
+  app.setPath('sessionData', sessionDataDir)
 }
 
 export function loadConfig(defaultRole: AppRole = 'teacher'): {

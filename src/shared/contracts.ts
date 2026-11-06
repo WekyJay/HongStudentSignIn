@@ -20,6 +20,7 @@ export interface AppConfig {
 
 export interface RuntimeInfo {
   role: AppRole
+  appVersion: string
   schoolName: string
   schoolLogoDataUrl: string | null
   stationId: string
@@ -137,8 +138,17 @@ export interface ConnectedTerminal {
   stationId: string
   lastSeenAt: string
   screenCapturedAt?: string
-  screenDataUrl?: string
+  screenThumbnailDataUrl?: string
+  appVersion?: string
+  clientType?: 'desktop' | 'browser'
 }
+
+export interface TerminalScreenFrame {
+  capturedAt: string
+  dataUrl: string
+}
+
+export type TerminalSeatAssignments = Record<string, string>
 
 export interface AttendanceArchiveQuery {
   from?: string

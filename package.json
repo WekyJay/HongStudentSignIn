@@ -1,6 +1,6 @@
 {
   "name": "hong-student-sign-in",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "机房签到系统基础框架",
   "main": "./out/main/index.js",
   "private": true,
@@ -11,6 +11,7 @@
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test:archive": "node --experimental-strip-types --test tests/attendance-archive.test.mjs",
+    "test:terminals": "node --experimental-strip-types --test tests/terminal-seats.test.mjs",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "preview:student": "node tools/preview-student.mjs",

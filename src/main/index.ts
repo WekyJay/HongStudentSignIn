@@ -22,10 +22,12 @@ import type {
   AttendanceArchiveQuery,
   CheckinResult,
   ConnectedTerminal,
+  TerminalSeatAssignments,
   PublicSession,
   RuntimeInfo,
   SchoolAuthState,
   SchoolProfile,
+  TerminalScreenFrame,
   ThemeMode
 } from '../shared/contracts'
 import { applyUserDataDir, loadConfig, resolveBuildRole } from './config'
@@ -35,6 +37,7 @@ import { discoverTeacherUrl, getTeacherLanUrl, startTeacherDiscovery } from './t
 import { SchoolApiClient } from './school-api'
 import { TeacherService } from './teacher-service'
 import { TerminalRegistry } from './terminal-registry'
+import { TerminalSeats } from './terminal-seats'
 import { AttendanceArchive } from './attendance-archive'
 import { exportAttendanceExcel } from './attendance-export'
 
@@ -83,7 +86,7 @@ function applicationIconPathForSchoolLogo(schoolLogoPath: string | undefined): s
 let activeAppIconPath = applicationIconPath()
 
 // 学生端驻留托盘时再次双击快捷方式只唤起已有进程，不重复开托盘图标
-const singleInstance = app.requestSingleInstanceLock()
+const singleInstance = uiPreview || app.requestSingleInstanceLock()
 if (!singleInstance) app.quit()
 
 let mainWindow: BrowserWindow | null = null
@@ -359,44 +362,74 @@ function setStudentWindowActive(active: boolean, config: AppConfig, reload = fal
   }
 }
 
-function startStudentSessionMonitor(config: AppConfig): void {
+function createStudentPresenceReporter(
+  config: AppConfig,
+  stationId = hostname()
+): () => Promise<void> {
   let lastCaptureAt = 0
   let reporting = false
-  const reportPresence = async (): Promise<void> => {
+  let previewReportUnavailable = false
+  return async (): Promise<void> => {
     if (reporting) return
     reporting = true
     try {
       let screenDataUrl: string | undefined
+      let screenThumbnailDataUrl: string | undefined
       if (Date.now() - lastCaptureAt >= 9000) {
         lastCaptureAt = Date.now()
         try {
           const sources = await desktopCapturer.getSources({
             types: ['screen'],
-            thumbnailSize: { width: 640, height: 360 }
+            thumbnailSize: { width: 1600, height: 900 }
           })
           const primaryDisplayId = String(screen.getPrimaryDisplay().id)
           const source = sources.find((item) => item.display_id === primaryDisplayId) ?? sources[0]
           if (source && !source.thumbnail.isEmpty()) {
-            const jpeg = source.thumbnail.toJPEG(45)
-            if (jpeg.length < 240_000) {
-              screenDataUrl = `data:image/jpeg;base64,${jpeg.toString('base64')}`
+            const fullFrame = source.thumbnail.toJPEG(80)
+            if (fullFrame.length < 950_000) {
+              screenDataUrl = `data:image/jpeg;base64,${fullFrame.toString('base64')}`
             }
+            const thumbnail = source.thumbnail.resize({ width: 640, height: 360 }).toJPEG(48)
+            screenThumbnailDataUrl = `data:image/jpeg;base64,${thumbnail.toString('base64')}`
           }
         } catch (error) {
           console.warn('[student-screen] capture failed:', (error as Error).message)
         }
       }
-      await fetchTeacher(config, '/api/v1/terminals/presence', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stationId: hostname(), screenDataUrl })
-      }, 3500)
+      const result = await fetchTeacher<{ ok?: boolean }>(
+        config,
+        '/api/v1/terminals/presence',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            stationId,
+            screenDataUrl,
+            screenThumbnailDataUrl,
+            appVersion: app.getVersion(),
+            clientType: 'desktop'
+          })
+        },
+        3500
+      )
+      if (!result.ok) throw new Error('教师端尚未支持连接状态上报')
+      if (uiPreview && previewReportUnavailable) {
+        console.info('[student-preview] connected to teacher service')
+        previewReportUnavailable = false
+      }
     } catch (error) {
-      console.warn('[student-screen] report failed:', (error as Error).message)
+      if (!uiPreview || !previewReportUnavailable) {
+        console.warn('[student-screen] report failed:', (error as Error).message)
+      }
+      if (uiPreview) previewReportUnavailable = true
     } finally {
       reporting = false
     }
   }
+}
+
+function startStudentSessionMonitor(config: AppConfig): void {
+  const reportPresence = createStudentPresenceReporter(config)
   const poll = async (): Promise<void> => {
     try {
       const data = await fetchTeacher<{ session: PublicSession | null }>(
@@ -431,6 +464,15 @@ function startStudentSessionMonitor(config: AppConfig): void {
   void poll()
 }
 
+function startPreviewPresenceMonitor(config: AppConfig, teacherUrl: string): void {
+  const reportPresence = createStudentPresenceReporter(
+    { ...config, teacherUrl },
+    config.stationId || hostname()
+  )
+  void reportPresence()
+  setInterval(() => void reportPresence(), 3000)
+}
+
 function configureAutoStart(): void {
   if (!app.isPackaged) return
   // 自动化测试或调试传入独立数据目录时不写开机启动项
@@ -450,6 +492,7 @@ app.whenReady().then(async () => {
     )
     let service: TeacherService | null = null
     const terminals = new TerminalRegistry()
+    const terminalSeats = new TerminalSeats(join(app.getPath('userData'), 'terminal-seats.json'))
     let attendanceArchive: AttendanceArchive | null = null
     let serverError: string | undefined
     let stopServer: (() => Promise<void>) | undefined
@@ -464,10 +507,17 @@ app.whenReady().then(async () => {
       )
       await service.load()
       try {
-        stopServer = await startTeacherServer(config, service, terminals, join(__dirname, '../renderer'), {
-          schoolName: config.schoolName || '学校名称',
-          schoolLogoDataUrl: loadSchoolLogo(config.schoolLogoPath)
-        })
+        stopServer = await startTeacherServer(
+          config,
+          service,
+          terminals,
+          join(__dirname, '../renderer'),
+          {
+            schoolName: config.schoolName || '学校名称',
+            schoolLogoDataUrl: loadSchoolLogo(config.schoolLogoPath),
+            appVersion: app.getVersion()
+          }
+        )
         stopDiscovery = await startTeacherDiscovery(config)
       } catch (error) {
         serverError = (error as Error).message
@@ -485,6 +535,8 @@ app.whenReady().then(async () => {
       createStudentTray()
       startStudentSessionMonitor(config)
       console.info('[student-kiosk] tray resident, waiting for session')
+    } else if (config.role === 'student' && uiPreview && process.env.SIGNIN_PREVIEW_REPORT_URL) {
+      startPreviewPresenceMonitor(config, process.env.SIGNIN_PREVIEW_REPORT_URL)
     } else if (config.role === 'teacher') {
       // 教师端关闭窗口后留在托盘，签到服务继续运行
       createTeacherTray()
@@ -566,6 +618,7 @@ app.whenReady().then(async () => {
       if (!permitted(event.sender.id)) throw new Error('无权访问')
       return {
         role: config.role,
+        appVersion: app.getVersion(),
         schoolName: config.schoolName || '学校名称',
         schoolLogoDataUrl: loadSchoolLogo(config.schoolLogoPath),
         appSettings: {
@@ -607,9 +660,10 @@ app.whenReady().then(async () => {
       }
       return {
         role: 'student',
+        appVersion: app.getVersion(),
         schoolName,
         schoolLogoDataUrl,
-        stationId: hostname(),
+        stationId: uiPreview ? config.stationId : hostname(),
         teacherUrl: config.teacherUrl || discoveredTeacherUrl || '',
         schoolServerUrl: '',
         wechatAppId: '',
@@ -763,6 +817,28 @@ app.whenReady().then(async () => {
       if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
       return terminals.list()
     })
+    ipcMain.handle(
+      'teacher:terminal-screen',
+      (event, stationId: unknown): TerminalScreenFrame | null => {
+        if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+        if (typeof stationId !== 'string') throw new Error('机器名称无效')
+        return terminals.getScreen(stationId)
+      }
+    )
+    ipcMain.handle('teacher:terminal-seats', (event): TerminalSeatAssignments => {
+      if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+      return terminalSeats.list()
+    })
+    ipcMain.handle(
+      'teacher:set-terminal-seat',
+      (event, stationId: unknown, seatLabel: unknown): TerminalSeatAssignments => {
+        if (!permitted(event.sender.id, 'teacher')) throw new Error('无权访问')
+        if (typeof stationId !== 'string' || typeof seatLabel !== 'string') {
+          throw new Error('座位设置参数无效')
+        }
+        return terminalSeats.set(stationId, seatLabel)
+      }
+    )
     ipcMain.handle(
       'teacher:start',
       async (
@@ -934,7 +1010,11 @@ app.whenReady().then(async () => {
         const result = await fetchTeacher<CheckinResult>(config, '/api/v1/checkins', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId, idCard, stationId: hostname() })
+          body: JSON.stringify({
+            sessionId,
+            idCard,
+            stationId: uiPreview ? config.stationId : hostname()
+          })
         })
         if (result.code === 'SUCCESS' && config.closeAfterCheckin !== false) {
           setTimeout(() => {

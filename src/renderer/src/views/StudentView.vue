@@ -14,6 +14,7 @@ const idCardInput = useTemplateRef<HTMLInputElement>('idCardInput')
 const showIdCard = shallowRef(false)
 const showKeypad = shallowRef(false)
 const keypadKeys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '清空', '0', 'X', '退格']
+const clientLabel = typeof window.signIn === 'undefined' ? '网页端' : '学生端'
 
 function onIdInput(event: Event): void {
   idCard.value = (event.target as HTMLInputElement).value
@@ -201,6 +202,9 @@ watch(
       <p class="privacy-note">
         <span class="privacy-mark">✓</span>
         仅核对当前班级信息，输入内容在提交后立即清除
+      </p>
+      <p class="student-version">
+        {{ runtime?.stationId }} · {{ clientLabel }} v{{ runtime?.appVersion || '—' }}
       </p>
     </div>
 
@@ -653,6 +657,13 @@ watch(
   margin: clamp(14px, 2.4vh, 22px) 0 0;
   font-size: 12.5px;
   color: hsl(var(--muted-foreground));
+}
+
+.student-version {
+  margin: 8px 0 0;
+  color: hsl(var(--muted-foreground) / 0.72);
+  font-size: 11px;
+  text-align: center;
 }
 
 .privacy-mark {

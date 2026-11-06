@@ -5,12 +5,14 @@ import type {
   AttendanceArchiveQuery,
   CheckinResult,
   ConnectedTerminal,
+  TerminalSeatAssignments,
   AppSettings,
   PublicSession,
   RuntimeInfo,
   SchoolAuthState,
   SchoolClass,
   SchoolProfile,
+  TerminalScreenFrame,
   ThemeMode,
   TeacherSnapshot
 } from '../shared/contracts'
@@ -29,6 +31,9 @@ declare global {
       getSchoolClasses(): Promise<SchoolClass[]>
       getTeacherSnapshot(): Promise<TeacherSnapshot>
       getConnectedTerminals(): Promise<ConnectedTerminal[]>
+      getTerminalScreen(stationId: string): Promise<TerminalScreenFrame | null>
+      getTerminalSeats(): Promise<TerminalSeatAssignments>
+      setTerminalSeat(stationId: string, seatLabel: string): Promise<TerminalSeatAssignments>
       startSession(
         classId: string,
         className: string,

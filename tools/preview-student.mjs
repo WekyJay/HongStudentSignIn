@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const configPath = join(tmpdir(), `hong-student-sign-in-preview-${process.pid}.json`)
+const previewDataPath = mkdtempSync(join(tmpdir(), 'hong-student-sign-in-preview-data-'))
+const teacherReportUrl = process.env.SIGNIN_PREVIEW_TEACHER_URL || 'http://127.0.0.1:41731'
 const previewSession = {
   id: 'student-ui-preview',
   classId: 'PREVIEW-01',
@@ -42,11 +44,27 @@ function cleanup() {
   cleaned = true
   server.close()
   rmSync(configPath, { force: true })
+  const temporaryRoot = resolve(tmpdir()) + sep
+  if (resolve(previewDataPath).startsWith(temporaryRoot)) {
+    rmSync(previewDataPath, { recursive: true, force: true })
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-function startPreview() {
+async function startPreview() {
   const address = server.address()
+  let reportToTeacher = false
+  try {
+    const response = await fetch(new URL('/api/v1/terminals/presence', teacherReportUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stationId: 'PREVIEW-PC', clientType: 'desktop' }),
+      signal: AbortSignal.timeout(1500)
+    })
+    reportToTeacher = response.ok && (await response.json()).ok === true
+  } catch {
+    // The standalone preview still works when the teacher service is unavailable.
+  }
   writeFileSync(
     configPath,
     JSON.stringify(
@@ -66,7 +84,9 @@ function startPreview() {
   const childEnvironment = {
     ...process.env,
     SIGNIN_CONFIG_PATH: configPath,
-    SIGNIN_UI_PREVIEW: '1'
+    SIGNIN_UI_PREVIEW: '1',
+    SIGNIN_PREVIEW_REPORT_URL: teacherReportUrl,
+    ELECTRON_CLI_ARGS: JSON.stringify([`--user-data-dir=${previewDataPath}`])
   }
   delete childEnvironment.ELECTRON_RUN_AS_NODE
 
@@ -85,10 +105,17 @@ function startPreview() {
     cleanup()
     process.exitCode = code ?? 0
   })
-  console.log('学生端预览已准备。关闭全屏窗口后，在此终端按 Ctrl+C 结束预览服务。')
+  console.log(
+    reportToTeacher
+      ? `预览机 PREVIEW-PC 将出现在 ${teacherReportUrl} 的连接管理中。`
+      : `独立界面预览已启动；${teacherReportUrl} 当前没有可用的新版教师服务，服务启动后预览机会自动出现在连接管理中。`
+  )
+  console.log('关闭预览窗口后，在此终端按 Ctrl+C 结束预览服务。')
 }
 
-server.listen(0, '127.0.0.1', startPreview)
+server.listen(0, '127.0.0.1', () => {
+  void startPreview()
+})
 server.once('error', (error) => {
   console.error('无法启动临时预览服务：', error.message)
   cleanup()

@@ -981,6 +981,10 @@ onUnmounted(() => {
                 <dt>教师机电脑名称</dt>
                 <dd>{{ runtime?.stationId }}</dd>
               </div>
+              <div>
+                <dt>教师端版本</dt>
+                <dd>v{{ runtime?.appVersion || '—' }}</dd>
+              </div>
             </dl>
           </Card>
           <Card class="content-panel mt-5">

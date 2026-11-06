@@ -6,12 +6,14 @@ import type {
   AttendanceArchiveQuery,
   CheckinResult,
   ConnectedTerminal,
+  TerminalSeatAssignments,
   AppSettings,
   PublicSession,
   RuntimeInfo,
   SchoolAuthState,
   SchoolClass,
   SchoolProfile,
+  TerminalScreenFrame,
   ThemeMode,
   TeacherSnapshot
 } from '../shared/contracts'
@@ -31,7 +33,14 @@ const teacherApi = {
     ipcRenderer.invoke('school:student-avatar', avatarUrl, size),
   getSchoolClasses: (): Promise<SchoolClass[]> => ipcRenderer.invoke('school:classes'),
   getTeacherSnapshot: (): Promise<TeacherSnapshot> => ipcRenderer.invoke('teacher:snapshot'),
-  getConnectedTerminals: (): Promise<ConnectedTerminal[]> => ipcRenderer.invoke('teacher:terminals'),
+  getConnectedTerminals: (): Promise<ConnectedTerminal[]> =>
+    ipcRenderer.invoke('teacher:terminals'),
+  getTerminalScreen: (stationId: string): Promise<TerminalScreenFrame | null> =>
+    ipcRenderer.invoke('teacher:terminal-screen', stationId),
+  getTerminalSeats: (): Promise<TerminalSeatAssignments> =>
+    ipcRenderer.invoke('teacher:terminal-seats'),
+  setTerminalSeat: (stationId: string, seatLabel: string): Promise<TerminalSeatAssignments> =>
+    ipcRenderer.invoke('teacher:set-terminal-seat', stationId, seatLabel),
   startSession: (
     classId: string,
     className: string,

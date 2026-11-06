@@ -3,7 +3,10 @@ import type { CheckinResult, PublicSession, RuntimeInfo } from '../../../shared/
 interface PublicRuntimeInfo {
   schoolName?: string
   schoolLogoDataUrl?: string | null
+  appVersion?: string
 }
+
+let browserAppVersion = ''
 
 function hasElectronBridge(): boolean {
   return typeof window !== 'undefined' && typeof window.signIn !== 'undefined'
@@ -33,9 +36,11 @@ export async function getStudentRuntimeInfo(): Promise<RuntimeInfo> {
 
   const response = await fetch('/api/v1/runtime', { cache: 'no-store' })
   const branding = await readJson<PublicRuntimeInfo>(response)
+  browserAppVersion = branding.appVersion ?? ''
   const schoolName = branding.schoolName?.trim() || '学校名称'
   return {
     role: 'student',
+    appVersion: browserAppVersion,
     schoolName,
     schoolLogoDataUrl: branding.schoolLogoDataUrl ?? null,
     stationId: getBrowserStationId(),
@@ -60,6 +65,17 @@ export async function getStudentSession(): Promise<PublicSession | null> {
   if (hasElectronBridge()) return window.signIn.getStudentSession()
 
   const response = await fetch('/api/v1/session', { cache: 'no-store' })
+  if (response.ok) {
+    void fetch('/api/v1/terminals/presence', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stationId: getBrowserStationId(),
+        appVersion: browserAppVersion,
+        clientType: 'browser'
+      })
+    }).catch(() => undefined)
+  }
   return (await readJson<{ session: PublicSession | null }>(response)).session
 }
 

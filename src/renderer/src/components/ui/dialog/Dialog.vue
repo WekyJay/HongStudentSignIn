@@ -58,7 +58,8 @@ watch(
   backdrop-filter: blur(9px) saturate(0.75);
 }
 .dialog-wide {
-  width: min(100%, 960px);
+  width: min(calc(100vw - 48px), 1440px);
+  max-height: calc(100vh - 48px);
 }
 .dialog-header {
   display: flex;

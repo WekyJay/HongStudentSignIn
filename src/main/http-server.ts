@@ -36,7 +36,7 @@ async function readTerminalReport(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     length += buffer.length
-    if (length > 350_000) throw new Error('终端画面过大')
+    if (length > 1_500_000) throw new Error('终端画面过大')
     chunks.push(buffer)
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -47,9 +47,10 @@ export async function startTeacherServer(
   service: TeacherService,
   terminals: TerminalRegistry,
   rendererPath = resolve(__dirname, '../renderer'),
-  studentPageInfo: { schoolName: string; schoolLogoDataUrl: string | null } = {
+  studentPageInfo: { schoolName: string; schoolLogoDataUrl: string | null; appVersion: string } = {
     schoolName: config.schoolName || '学校名称',
-    schoolLogoDataUrl: null
+    schoolLogoDataUrl: null,
+    appVersion: ''
   }
 ): Promise<() => Promise<void>> {
   // 学生端已经按场次状态自动收起窗口；按终端地址隔离成功记录即可沿用现有行为。
@@ -156,18 +157,40 @@ export async function startTeacherServer(
         }
         const input = await readTerminalReport(request)
         if (!input || typeof input !== 'object') throw new Error('终端信息格式不正确')
-        const report = input as { stationId?: unknown; screenDataUrl?: unknown }
+        const report = input as {
+          stationId?: unknown
+          screenDataUrl?: unknown
+          screenThumbnailDataUrl?: unknown
+          appVersion?: unknown
+          clientType?: unknown
+        }
         if (
           typeof report.stationId !== 'string' ||
           !report.stationId.trim() ||
           report.stationId.length > 100 ||
+          (report.appVersion !== undefined &&
+            (typeof report.appVersion !== 'string' || report.appVersion.length > 32)) ||
+          (report.clientType !== undefined &&
+            report.clientType !== 'desktop' &&
+            report.clientType !== 'browser') ||
+          (report.screenThumbnailDataUrl !== undefined &&
+            (typeof report.screenThumbnailDataUrl !== 'string' ||
+              !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(
+                report.screenThumbnailDataUrl
+              ))) ||
           (report.screenDataUrl !== undefined &&
             (typeof report.screenDataUrl !== 'string' ||
               !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(report.screenDataUrl)))
         ) {
           throw new Error('终端信息格式不正确')
         }
-        terminals.update(report.stationId.trim(), report.screenDataUrl)
+        terminals.update({
+          stationId: report.stationId.trim(),
+          screenDataUrl: report.screenDataUrl as string | undefined,
+          screenThumbnailDataUrl: report.screenThumbnailDataUrl as string | undefined,
+          appVersion: report.appVersion as string | undefined,
+          clientType: report.clientType as 'desktop' | 'browser' | undefined
+        })
         json(response, 200, { ok: true })
         return
       }
